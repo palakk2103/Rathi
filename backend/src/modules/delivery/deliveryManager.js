@@ -52,6 +52,20 @@ export async function createShipment(context) {
 }
 
 /**
+ * Assign courier, generate AWB and schedule pickup for an already created shipment.
+ *
+ * @param {object} context
+ * @returns {Promise<UnifiedShipmentResult|null>}
+ */
+export async function assignAwbAndPickup(context) {
+    const provider = resolveProvider(context);
+    if (typeof provider.assignAwbAndPickup === 'function') {
+        return provider.assignAwbAndPickup(context);
+    }
+    return provider.createShipment(context);
+}
+
+/**
  * Cancel a shipment with the provider.
  *
  * @param {ShipmentContext} context – must include externalShipmentId or shiprocketOrderId
@@ -134,6 +148,32 @@ export function parseWebhookPayload(providerName, rawBody, headers) {
 }
 
 /**
+ * Register a pickup warehouse location with the delivery provider.
+ *
+ * @param {object} locationData
+ * @param {string} [preferredProvider]
+ * @returns {Promise<object>}
+ */
+export async function addPickupLocation(locationData, preferredProvider) {
+    const provider = resolveProvider({ preferredProvider });
+    if (typeof provider.addPickupLocation === 'function') {
+        return provider.addPickupLocation(locationData);
+    }
+    return { success: true, pickupLocationName: locationData.name || 'Primary' };
+}
+
+/**
+ * Get all registered pickup locations from provider.
+ */
+export async function getPickupLocations(preferredProvider) {
+    const provider = resolveProvider({ preferredProvider });
+    if (typeof provider.getPickupLocations === 'function') {
+        return provider.getPickupLocations();
+    }
+    return [];
+}
+
+/**
  * Force a token refresh for the active provider.
  * Call this from an admin action or a scheduled cron.
  */
@@ -150,6 +190,8 @@ export default {
     getTrackingInfo,
     getETA,
     getQuote,
+    addPickupLocation,
+    getPickupLocations,
     normalizeProviderStatus,
     verifyWebhookSignature,
     parseWebhookPayload,

@@ -46,6 +46,8 @@ const normalizeWishlistItem = (item) => {
   };
 };
 
+let wishlistFetchInFlight = null;
+
 export const useWishlistStore = create(
   persist(
     (set, get) => ({
@@ -56,9 +58,14 @@ export const useWishlistStore = create(
 
       fetchWishlist: async () => {
         const authState = useAuthStore.getState();
-        if (!authState?.isAuthenticated) {
-          set({ items: [], hasFetched: false, ownerUserId: null, isLoading: false });
-          return get().items;
+        const userRole = String(authState?.user?.role || 'customer').toLowerCase();
+        if (!authState?.isAuthenticated || (authState?.user?.role && userRole !== 'customer')) {
+          set({ items: [], hasFetched: true, ownerUserId: null, isLoading: false });
+          return [];
+        }
+
+        if (wishlistFetchInFlight) {
+          return wishlistFetchInFlight;
         }
 
         const currentUserId = getCurrentAuthUserId();
@@ -67,28 +74,35 @@ export const useWishlistStore = create(
         }
 
         set({ isLoading: true });
-        try {
-          const response = await api.get('/user/wishlist');
-          const payload = response?.data ?? response;
-          const list = Array.isArray(payload)
-            ? payload.map(normalizeWishlistItem).filter((item) => item.id)
-            : [];
-          set({ items: list, isLoading: false, hasFetched: true, ownerUserId: currentUserId || null });
-          return list;
-        } catch {
-          set({ isLoading: false });
-          return get().items;
-        }
+        wishlistFetchInFlight = (async () => {
+          try {
+            const response = await api.get('/user/wishlist');
+            const payload = response?.data ?? response;
+            const list = Array.isArray(payload)
+              ? payload.map(normalizeWishlistItem).filter((item) => item.id)
+              : [];
+            set({ items: list, isLoading: false, hasFetched: true, ownerUserId: currentUserId || null });
+            return list;
+          } catch {
+            set({ isLoading: false, hasFetched: true });
+            return get().items;
+          } finally {
+            wishlistFetchInFlight = null;
+          }
+        })();
+
+        return wishlistFetchInFlight;
       },
 
       ensureHydrated: () => {
         const authState = useAuthStore.getState();
         const state = get();
         const currentUserId = getCurrentAuthUserId();
+        const userRole = String(authState?.user?.role || 'customer').toLowerCase();
 
-        if (!authState?.isAuthenticated) {
-          if (state.items.length || state.hasFetched || state.ownerUserId) {
-            set({ items: [], hasFetched: false, ownerUserId: null });
+        if (!authState?.isAuthenticated || (authState?.user?.role && userRole !== 'customer')) {
+          if (state.items.length || state.ownerUserId) {
+            set({ items: [], hasFetched: true, ownerUserId: null, isLoading: false });
           }
           return;
         }
@@ -102,7 +116,7 @@ export const useWishlistStore = create(
           return;
         }
 
-        if (!state.hasFetched && !state.isLoading) {
+        if (!state.hasFetched && !state.isLoading && !wishlistFetchInFlight) {
           state.fetchWishlist().catch(() => null);
         }
       },

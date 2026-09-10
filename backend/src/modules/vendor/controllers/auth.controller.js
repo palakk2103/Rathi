@@ -21,6 +21,7 @@ export const register = asyncHandler(async (req, res) => {
         name, 
         email, 
         phone, 
+        password,
         storeName, 
         storeDescription, 
         address, 
@@ -34,8 +35,22 @@ export const register = asyncHandler(async (req, res) => {
     } = req.body;
 
     const normalizedEmail = String(email || '').trim().toLowerCase();
-    const existing = await Vendor.findOne({ email: normalizedEmail });
-    if (existing) throw new ApiError(409, 'Email already registered.');
+    const normalizedPhone = String(phone || '').replace(/\D/g, '').slice(-10);
+
+    if (!normalizedPhone || normalizedPhone.length !== 10) {
+        throw new ApiError(400, 'Please provide a valid 10-digit mobile number.');
+    }
+
+    const existing = await Vendor.findOne({
+        $or: [
+            { email: normalizedEmail },
+            { phone: normalizedPhone }
+        ]
+    });
+    if (existing) {
+        if (existing.email === normalizedEmail) throw new ApiError(409, 'Email already registered.');
+        throw new ApiError(409, 'Phone number already registered.');
+    }
 
     const categoriesArray = Array.isArray(categories) ? categories : [];
     if (categoriesArray.length === 0) {
@@ -122,7 +137,8 @@ export const register = asyncHandler(async (req, res) => {
     const vendor = await Vendor.create({
         name: String(name || '').trim(),
         email: normalizedEmail,
-        phone: String(phone || '').trim(),
+        phone: normalizedPhone,
+        password: password || undefined,
         storeName: String(storeName || '').trim(),
         storeDescription: String(storeDescription || '').trim(),
         address,
@@ -139,7 +155,7 @@ export const register = asyncHandler(async (req, res) => {
         status: 'pending',
         verificationTimeline: [{
             status: 'pending',
-            remarks: 'Account registered. Email verification OTP sent.',
+            remarks: 'Account registered. Phone SMS verification OTP sent.',
             updatedByName: 'System',
             updatedAt: new Date()
         }],
@@ -153,6 +169,8 @@ export const register = asyncHandler(async (req, res) => {
             timestamp: new Date()
         }]
     });
+
+    // Send verification OTP via SMS (SMS India Hub)
     await sendOTP(vendor, 'vendor_verification');
 
     // Notify all active admins asynchronously in the background.
@@ -177,37 +195,61 @@ export const register = asyncHandler(async (req, res) => {
         })
         .catch(err => console.error('[Vendor Registration Find Admins Error]:', err));
 
-    res.status(201).json(new ApiResponse(201, { email: vendor.email }, 'Registration submitted. Please verify your email and await admin approval.'));
+    res.status(201).json(
+        new ApiResponse(
+            201, 
+            { email: vendor.email, phone: vendor.phone }, 
+            'Registration submitted. Please verify the OTP sent to your phone number.'
+        )
+    );
 });
 
 // POST /api/vendor/auth/verify-otp
 export const verifyOTP = asyncHandler(async (req, res) => {
-    const { email, otp } = req.body;
+    const { phone, email, otp } = req.body;
+    const normalizedPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
+    const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
 
-    const vendor = await Vendor.findOne({ email }).select('+otp +otpExpiry');
+    let vendor = null;
+    if (normalizedPhone) {
+        vendor = await Vendor.findOne({ phone: normalizedPhone }).select('+otp +otpExpiry');
+    } else if (normalizedEmail) {
+        vendor = await Vendor.findOne({ email: normalizedEmail }).select('+otp +otpExpiry');
+    }
     if (!vendor) throw new ApiError(404, 'Vendor not found.');
-    if (otp !== '123456' && vendor.otp !== otp) throw new ApiError(400, 'Invalid OTP.');
-    if (otp !== '123456' && vendor.otpExpiry < Date.now()) throw new ApiError(400, 'OTP has expired.');
+
+    const isDev = process.env.NODE_ENV !== 'production';
+    const isMasterBypass = isDev && otp === '123456';
+
+    if (!isMasterBypass && vendor.otp !== otp) throw new ApiError(400, 'Invalid OTP.');
+    if (!isMasterBypass && vendor.otpExpiry < Date.now()) throw new ApiError(400, 'OTP has expired. Please request a new one.');
 
     vendor.isVerified = true;
     vendor.otp = undefined;
     vendor.otpExpiry = undefined;
     await vendor.save();
 
-    res.status(200).json(new ApiResponse(200, null, 'Email verified. Awaiting admin approval.'));
+    res.status(200).json(new ApiResponse(200, null, 'Phone verified successfully. Your account is pending admin approval.'));
 });
 
 // POST /api/vendor/auth/resend-otp
 export const resendOTP = asyncHandler(async (req, res) => {
-    const { email } = req.body;
-    if (!email) throw new ApiError(400, 'Email is required.');
+    const { phone, email } = req.body;
+    const normalizedPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
+    const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
 
-    const vendor = await Vendor.findOne({ email });
+    let vendor = null;
+    if (normalizedPhone) {
+        vendor = await Vendor.findOne({ phone: normalizedPhone });
+    } else if (normalizedEmail) {
+        vendor = await Vendor.findOne({ email: normalizedEmail });
+    }
+
     if (!vendor) throw new ApiError(404, 'Vendor not found.');
-    if (vendor.isVerified) throw new ApiError(400, 'Email is already verified.');
+    if (vendor.isVerified) throw new ApiError(400, 'Account is already verified.');
 
     await sendOTP(vendor, 'vendor_verification');
-    res.status(200).json(new ApiResponse(200, null, 'OTP resent successfully. Please check your email.'));
+    res.status(200).json(new ApiResponse(200, null, 'OTP resent successfully to your phone number.'));
 });
 
 // POST /api/vendor/auth/forgot-password
@@ -302,22 +344,52 @@ export const sendLoginOTP = asyncHandler(async (req, res) => {
 
 // POST /api/vendor/auth/login
 export const login = asyncHandler(async (req, res) => {
-    const { email, otp } = req.body;
-    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const { phone, email, identifier, password, otp } = req.body;
+    const rawIdentifier = String(phone || email || identifier || '').trim();
 
-    const vendor = await Vendor.findOne({ email: normalizedEmail }).select('+otp +otpExpiry');
-    if (!vendor) throw new ApiError(401, 'Invalid credentials.');
+    if (!rawIdentifier) {
+        throw new ApiError(400, 'Please provide your phone number or email address.');
+    }
 
-    if (otp !== '123456' && vendor.otp !== otp) throw new ApiError(400, 'Invalid OTP.');
-    if (otp !== '123456' && vendor.otpExpiry < Date.now()) throw new ApiError(400, 'OTP has expired.');
+    let query = {};
+    const digitsOnly = rawIdentifier.replace(/\D/g, '');
+    const isPhone = digitsOnly.length >= 10 && !rawIdentifier.includes('@');
+
+    if (isPhone) {
+        const normalizedPhone = digitsOnly.slice(-10);
+        query = { phone: normalizedPhone };
+    } else {
+        query = { email: rawIdentifier.toLowerCase() };
+    }
+
+    const vendor = await Vendor.findOne(query).select('+password +otp +otpExpiry');
+    if (!vendor) throw new ApiError(401, 'Invalid mobile number/email or password.');
+
+    // 1. Password authentication mode (Primary)
+    if (password) {
+        if (!vendor.password) {
+            throw new ApiError(401, 'No password set on this account. Please reset your password or login via OTP.');
+        }
+        const isMatch = await vendor.comparePassword(password);
+        if (!isMatch) throw new ApiError(401, 'Invalid mobile number/email or password.');
+    } else if (otp) {
+        // 2. OTP fallback authentication mode
+        const isDev = process.env.NODE_ENV !== 'production';
+        const isMasterBypass = isDev && otp === '123456';
+        if (!isMasterBypass && vendor.otp !== otp) throw new ApiError(400, 'Invalid OTP.');
+        if (!isMasterBypass && vendor.otpExpiry < Date.now()) throw new ApiError(400, 'OTP has expired.');
+    } else {
+        throw new ApiError(400, 'Please provide password or OTP to login.');
+    }
 
     if (!vendor.isVerified) {
-        vendor.isVerified = true;
+        await sendOTP(vendor, 'vendor_verification');
+        throw new ApiError(403, 'Account not verified. A verification OTP has been sent to your phone number.');
     }
 
     if (vendor.status !== 'approved') {
         if (vendor.status === 'pending' || vendor.status === 'action_required') {
-            // Allow login
+            // Allow login to access status dashboard
         } else {
             if (vendor.status === 'rejected') {
                 throw new ApiError(403, 'Your registration was rejected. Please contact support.');
@@ -335,7 +407,24 @@ export const login = asyncHandler(async (req, res) => {
 
     const { accessToken, refreshToken } = generateTokens({ id: vendor._id, role: 'vendor', email: vendor.email });
     await persistRefreshSession(vendor, refreshToken);
-    res.status(200).json(new ApiResponse(200, { accessToken, refreshToken, vendor: { id: vendor._id, name: vendor.name, storeName: vendor.storeName, email: vendor.email, storeLogo: vendor.storeLogo } }, 'Login successful.'));
+    res.status(200).json(
+        new ApiResponse(
+            200, 
+            { 
+                accessToken, 
+                refreshToken, 
+                vendor: { 
+                    id: vendor._id, 
+                    name: vendor.name, 
+                    storeName: vendor.storeName, 
+                    email: vendor.email, 
+                    phone: vendor.phone,
+                    storeLogo: vendor.storeLogo 
+                } 
+            }, 
+            'Login successful.'
+        )
+    );
 });
 
 // POST /api/vendor/auth/refresh

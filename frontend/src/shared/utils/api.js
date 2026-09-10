@@ -2,7 +2,8 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { API_BASE_URL } from './constants';
 
-// Monkeypatch toast.error to silence annoying network connection errors globally
+// Monkeypatch toast.error to silence annoying network connection errors globally and deduplicate rapid identical errors
+const recentToastMessages = new Map();
 const originalToastError = toast.error;
 toast.error = (message, options) => {
   if (
@@ -18,6 +19,13 @@ toast.error = (message, options) => {
     console.warn('Silenced network error toast:', message);
     return null;
   }
+  const str = String(message);
+  const now = Date.now();
+  const lastTime = recentToastMessages.get(str) || 0;
+  if (now - lastTime < 2500) {
+    return null; // debounce identical toast
+  }
+  recentToastMessages.set(str, now);
   return originalToastError(message, options);
 };
 
@@ -221,6 +229,13 @@ api.interceptors.response.use(
         error.message ||
         'Something went wrong';
       toast.error(message);
+    }
+
+    if (error.response?.status === 403) {
+      const msg = String(error.response?.data?.message || '').toLowerCase();
+      if (msg.includes('required role') || msg.includes('access denied')) {
+        clearScopeAuth(scope);
+      }
     }
 
     if (error.response?.status === 401) {

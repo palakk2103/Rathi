@@ -19,7 +19,9 @@ import * as brandController from '../controllers/brand.controller.js';
 import * as payoutController from '../controllers/payout.controller.js';
 import * as gstSettingsController from '../controllers/gstSettings.controller.js';
 import * as bulkUploadController from '../controllers/bulkUpload.controller.js';
+import * as pickupLocationController from '../controllers/pickupLocation.controller.js';
 import multer from 'multer';
+import { emitToVendor } from '../../../services/socket.service.js';
 
 import { authenticate } from '../../../middlewares/authenticate.js';
 import { authorize, enforceAccountStatus } from '../../../middlewares/authorize.js';
@@ -117,6 +119,7 @@ router.get('/orders', ...vendorAuth, orderController.getVendorOrders);
 router.get('/orders/:id', ...vendorAuth, orderController.getVendorOrderById);
 router.patch('/orders/:id/status', ...vendorAuth, orderController.updateOrderStatus);
 router.post('/orders/:id/shipment', ...vendorAuth, vendorShipmentController.createVendorShipment);
+router.post('/orders/:id/shipment/pickup', ...vendorAuth, vendorShipmentController.scheduleVendorPickup);
 router.get('/orders/:id/shipment', ...vendorAuth, vendorShipmentController.getVendorShipment);
 router.get('/orders/:id/shipment/tracking', ...vendorAuth, vendorShipmentController.getVendorShipmentTracking);
 router.get('/orders/:id/shipment/label', ...vendorAuth, vendorShipmentController.getVendorShipmentLabel);
@@ -180,8 +183,64 @@ router.post('/shipping/rates', ...vendorAuth, shippingController.createShippingR
 router.put('/shipping/rates/:id', ...vendorAuth, shippingController.updateShippingRate);
 router.delete('/shipping/rates/:id', ...vendorAuth, shippingController.deleteShippingRate);
 
+// Pickup Locations management (Warehouse / Store Addresses synced with Shiprocket)
+router.get('/pickup-locations', ...vendorAuth, pickupLocationController.getVendorPickupLocations);
+router.post('/pickup-locations', ...vendorAuth, pickupLocationController.createVendorPickupLocation);
+router.put('/pickup-locations/:id', ...vendorAuth, pickupLocationController.updateVendorPickupLocation);
+router.delete('/pickup-locations/:id', ...vendorAuth, pickupLocationController.deleteVendorPickupLocation);
+router.patch('/pickup-locations/:id/default', ...vendorAuth, pickupLocationController.setDefaultPickupLocation);
+
 // Uploads (Cloudinary via temp local multer upload)
 router.post('/uploads/image', ...vendorAuth, uploadSingle('image'), uploadController.uploadImage);
 router.post('/uploads/images', ...vendorAuth, uploadMultiple('images', 8), uploadController.uploadImages);
 
+// Test/Debug endpoint to simulate real-time incoming order popup
+router.post('/test-order-popup', ...vendorAuth, (req, res) => {
+    const orderId = `ORD-TEST-${Math.floor(100000 + Math.random() * 900000)}`;
+    const testPayload = {
+        orderId,
+        _id: `test_${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        items: [
+            {
+                productId: 'test_product_1',
+                name: 'Premium Cotton Polo T-Shirt',
+                image: 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?w=200',
+                price: 799,
+                quantity: 2,
+                variantKey: 'Size=L | Color=Navy Blue',
+            },
+            {
+                productId: 'test_product_2',
+                name: 'Classic Slim Fit Denim Jeans',
+                image: 'https://images.unsplash.com/photo-1542272604-780c96856592?w=200',
+                price: 1499,
+                quantity: 1,
+                variantKey: 'Size=32 | Color=Indigo',
+            },
+        ],
+        subtotal: 3097,
+        shipping: 50,
+        tax: 154,
+        discount: 0,
+        total: 3301,
+        paymentMethod: 'cod',
+        paymentStatus: 'pending',
+        status: 'pending',
+        shippingAddress: {
+            name: 'Ananya Sharma',
+            city: 'Jaipur',
+            state: 'Rajasthan',
+            address: '42 Malviya Nagar',
+            zipCode: '302017',
+            country: 'India',
+        },
+        customerName: 'Ananya Sharma',
+    };
+
+    const emitted = emitToVendor(String(req.user.id), 'new-order', testPayload);
+    res.status(200).json({ success: true, message: 'Test order notification emitted to your vendor room', orderId, emitted });
+});
+
 export default router;
+

@@ -6,6 +6,7 @@ import { createNotification } from '../../../services/notification.service.js';
 import { ApiError } from '../../../utils/ApiError.js';
 import { ApiResponse } from '../../../utils/ApiResponse.js';
 import { asyncHandler } from '../../../utils/asyncHandler.js';
+import { sendOrderStatusEmail } from '../../../services/orderEmailNotification.service.js';
 
 const enrichReturnItems = (request) => {
     const orderItems = Array.isArray(request?.orderId?.items) ? request.orderId.items : [];
@@ -231,8 +232,10 @@ export const updateReturnRequestStatus = asyncHandler(async (req, res) => {
             const order = await Order.findById(linkedOrderId);
             if (order && order.isDeleted !== true) {
                 if (status === 'approved' && !['cancelled', 'returned'].includes(order.status)) {
+                    const prevReturnStatus = order.status;
                     order.status = 'returned';
                     await order.save();
+                    sendOrderStatusEmail(order, prevReturnStatus, 'returned').catch(() => {});
                 }
 
                 if (status === 'completed') {

@@ -10,6 +10,7 @@
 import crypto from 'crypto';
 import { shiprocketRequest, refreshShiprocketToken, ProviderError } from './shiprocketClient.js';
 import { providerStatusToOrderStatus } from '../../deliveryStatusMapping.js';
+import { normalizeIndianState, sanitizeAddressLine1 } from '../../../../utils/indianStates.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -17,11 +18,11 @@ function getChannelId() {
     return process.env.SHIPROCKET_CHANNEL_ID || null;
 }
 
-function cleanPickupNickname(name) {
+export function cleanPickupNickname(name) {
     if (!name) return 'Primary';
-    // Remove special characters, keep letters, numbers, hyphens, underscores and spaces
-    let clean = name.replace(/[^a-zA-Z0-9\-_ ]/g, '');
-    return clean.slice(0, 36).trim();
+    // Remove special characters, convert spaces to underscores for Shiprocket nickname compliance
+    let clean = name.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9\-_]/g, '');
+    return clean.slice(0, 36).trim() || 'Primary';
 }
 
 /** Build the Shiprocket order payload from a ShipmentContext object. */
@@ -41,6 +42,10 @@ function buildOrderPayload(context) {
         hsn:                item.hsn || '',
     }));
 
+    const pickupLocationNickname = cleanPickupNickname(
+        pickup?.pickup_location || pickup?.shiprocketLocationName || pickup?.name || 'Primary'
+    );
+
     return {
         order_id:             String(orderId),
         order_date:           new Date().toISOString().split('T')[0],
@@ -52,10 +57,10 @@ function buildOrderPayload(context) {
         billing_address_2:    '',
         billing_city:         String(drop.city    || ''),
         billing_pincode:      String(drop.pincode || ''),
-        billing_state:        String(drop.state   || ''),
+        billing_state:        normalizeIndianState(drop.state || ''),
         billing_country:      'India',
         billing_email:        String(drop.email   || ''),
-        billing_phone:        String(drop.phone   || ''),
+        billing_phone:        String(drop.phone   || '').replace(/\D/g, '').slice(-10),
         shipping_is_billing:  true,
         payment_method:       String(paymentMode  || 'PREPAID').toUpperCase() === 'COD' ? 'COD' : 'Prepaid',
         sub_total:            Number(totalValue   || 0),
@@ -64,7 +69,7 @@ function buildOrderPayload(context) {
         height:               Number(context.height  || 5),
         weight:               Number(weight          || 0.5),
         order_items:          orderItems,
-        pickup_location:      cleanPickupNickname(pickup.name || 'Primary'),
+        pickup_location:      pickupLocationNickname,
     };
 }
 
@@ -77,22 +82,31 @@ export const shiprocketProvider = {
     async createShipment(context) {
         const payload = buildOrderPayload(context);
 
-        // Step 0: Register pickup location on Shiprocket if provided
+        // Step 0: Dynamically ensure pickup location is registered on Shiprocket
         if (context.pickup) {
+            const pickupNickname = cleanPickupNickname(
+                context.pickup.pickup_location ||
+                context.pickup.shiprocketLocationName ||
+                context.pickup.name ||
+                'Primary'
+            );
+            const pickupPhone = String(context.pickup.phone || '').replace(/\D/g, '').slice(-10);
+
             try {
                 await shiprocketRequest('POST', '/settings/company/addpickup', {
-                    pickup_location: cleanPickupNickname(context.pickup.name || 'Primary'),
-                    name:            String(context.pickup.name || 'Primary').slice(0, 36),
+                    pickup_location: pickupNickname,
+                    name:            String(context.pickup.contactName || context.pickup.name || 'Vendor Warehouse').slice(0, 36),
                     email:           String(context.pickup.email || 'vendor@example.com'),
-                    phone:           String(context.pickup.phone || '').replace(/\D/g, '').slice(0, 10),
-                    address:         String(context.pickup.address || '').slice(0, 80),
+                    phone:           pickupPhone,
+                    address:         sanitizeAddressLine1(context.pickup.address, context.pickup.city),
+                    address_2:       String(context.pickup.address_2 || '').slice(0, 80),
                     city:            String(context.pickup.city || ''),
-                    state:           String(context.pickup.state || ''),
+                    state:           normalizeIndianState(context.pickup.state || ''),
                     country:         'India',
-                    pin_code:        String(context.pickup.pincode || ''),
+                    pin_code:        String(context.pickup.pincode || context.pickup.zipCode || ''),
                 });
             } catch (err) {
-                console.warn('[shiprocketProvider] Auto-registering pickup location returned/warned:', err.message);
+                console.warn(`[shiprocketProvider] Pickup location (${pickupNickname}) registration notice:`, err.message);
             }
         }
 
@@ -108,23 +122,97 @@ export const shiprocketProvider = {
             );
         }
 
-        // Step 2: Generate AWB
-        const awbPayload = {
-            shipment_id: [shipmentId],
-        };
-        if (context.courierId) {
-            awbPayload.courier_id = context.courierId;
+        // Run Courier Assignment, AWB Generation, Pickup Scheduling & Label Fetching
+        return this.assignAwbAndPickup({
+            ...context,
+            shipmentId: Number(shipmentId),
+            orderId:    orderId || context.orderId,
+        });
+    },
+
+    // ── assignAwbAndPickup ─────────────────────────────────────────────────
+    /**
+     * Programmatically activates shipment (Ship Now equivalent):
+     * 1. Resolves cheapest/best courier (if not already provided).
+     * 2. Calls /courier/assign/awb to assign courier & generate AWB tracking code.
+     * 3. Calls /courier/generate/pickup to schedule courier pickup.
+     * 4. Calls /courier/generate/label to get shipping label URL.
+     */
+    async assignAwbAndPickup(params) {
+        const shipmentId = Number(params.shipmentId || params.shiprocketShipmentId);
+        const orderId    = params.orderId || params.shiprocketOrderId;
+
+        if (!shipmentId) {
+            throw new ProviderError('INVALID_SHIPMENT_ID', 'Valid shipmentId is required to assign courier/AWB.');
         }
 
-        const awbRes = await shiprocketRequest('POST', '/courier/assign/awb', awbPayload);
-        const awbData = awbRes?.response?.data || awbRes;
-        const awb     = awbData?.awb_code || null;
-        const courierId = awbData?.courier_company_id || context.courierId || null;
-        const courierName = awbData?.courier_name || null;
+        // Step 2A: Resolve courier (auto-select cheapest available courier if not provided)
+        let resolvedCourierId = params.courierId ? Number(params.courierId) : null;
+        let resolvedCourierName = params.courierName || null;
 
-        const trackingUrl = awb
-            ? `https://shiprocket.co/tracking/${awb}`
-            : null;
+        if (!resolvedCourierId && params.pickup?.pincode && params.drop?.pincode) {
+            try {
+                const quote = await this.getQuote(params);
+                if (quote?.courierId) {
+                    resolvedCourierId = Number(quote.courierId);
+                    resolvedCourierName = quote.courierName || null;
+                }
+            } catch (err) {
+                console.warn('[shiprocketProvider] Auto-courier quote resolution notice:', err.message);
+            }
+        }
+
+        // Step 2B: Generate AWB
+        const awbPayload = {
+            shipment_id: shipmentId, // Send as Number
+        };
+        if (resolvedCourierId) {
+            awbPayload.courier_id = resolvedCourierId;
+        }
+
+        let awbRes;
+        try {
+            awbRes = await shiprocketRequest('POST', '/courier/assign/awb', awbPayload);
+        } catch (err) {
+            awbRes = { awb_assign_status: 0, message: err.message };
+        }
+
+        const isAwbSuccess = awbRes?.awb_assign_status === 1 ||
+            Boolean(awbRes?.response?.data?.awb_code || awbRes?.awb_code);
+        const awbData = awbRes?.response?.data || awbRes?.response || awbRes;
+        const awb = isAwbSuccess ? (awbData?.awb_code || awbRes?.awb_code || null) : null;
+        const courierId = isAwbSuccess ? (awbData?.courier_company_id || resolvedCourierId || null) : null;
+        const courierName = isAwbSuccess ? (awbData?.courier_name || resolvedCourierName || null) : null;
+
+        // If AWB assignment failed (e.g. low wallet balance, serviceability rule)
+        if (!isAwbSuccess || !awb) {
+            const rawMsg = typeof awbData === 'string'
+                ? awbData
+                : (awbRes?.message || awbData?.message || JSON.stringify(awbData));
+            const isWalletLow = /wallet|recharge|balance|credit/i.test(rawMsg);
+            const friendlyMsg = isWalletLow
+                ? 'Shiprocket wallet balance is insufficient. Please recharge your Shiprocket wallet to assign courier and schedule pickup.'
+                : (rawMsg || 'Courier assignment pending in Shiprocket.');
+
+            return {
+                externalId:          null,
+                awbCode:             null,
+                courierId:           null,
+                courierName:         null,
+                trackingUrl:         null,
+                labelUrl:            null,
+                label:               null,
+                providerStatus:      isWalletLow ? 'WALLET_RECHARGE_REQUIRED' : 'AWB_ASSIGNMENT_PENDING',
+                pickupStatus:        isWalletLow ? 'WALLET_RECHARGE_REQUIRED' : 'PENDING',
+                shiprocketOrderId:   orderId,
+                shiprocketShipmentId: shipmentId,
+                isAwbAssigned:       false,
+                isWalletLow,
+                warning:             friendlyMsg,
+            };
+        }
+
+        const trackingUrl = `https://shiprocket.co/tracking/${awb}`;
 
         // Step 3: Attempt label generation
         let labelUrl = null;
@@ -138,25 +226,33 @@ export const shiprocketProvider = {
         }
 
         // Step 4: Schedule pickup automatically
+        let pickupScheduled = false;
+        let pickupScheduledDate = null;
         try {
-            await shiprocketRequest('POST', '/courier/generate/pickup', {
+            const pickupRes = await shiprocketRequest('POST', '/courier/generate/pickup', {
                 shipment_id: [shipmentId],
             });
+            pickupScheduled = true;
+            pickupScheduledDate = pickupRes?.response?.pickup_scheduled_date || pickupRes?.pickup_scheduled_date || new Date();
         } catch (err) {
-            console.warn('[shiprocketProvider] Pickup request deferred:', err.message);
+            console.warn('[shiprocketProvider] Pickup request notice:', err.message);
         }
 
         return {
-            externalId:          awb || String(shipmentId),
+            externalId:          awb,
             awbCode:             awb,
             courierId:           courierId ? Number(courierId) : null,
             courierName:         courierName ? String(courierName) : null,
             trackingUrl,
             labelUrl,
             label:               null,
-            providerStatus:      'PICKUP SCHEDULED',
+            providerStatus:      pickupScheduled ? 'PICKUP SCHEDULED' : 'AWB ASSIGNED',
+            pickupStatus:        pickupScheduled ? 'SCHEDULED' : 'PENDING',
+            pickupScheduledDate,
             shiprocketOrderId:   orderId,
             shiprocketShipmentId: shipmentId,
+            isAwbAssigned:       true,
+            isWalletLow:         false,
         };
     },
 
@@ -346,6 +442,37 @@ export const shiprocketProvider = {
             location: null,
             meta: body,
         };
+    },
+
+    // ── addPickupLocation ──────────────────────────────────────────────────
+    async addPickupLocation(locationData) {
+        const rawNickname = locationData.pickup_location || locationData.shiprocketLocationName || locationData.name || 'Primary';
+        const nickname = cleanPickupNickname(rawNickname);
+        const payload = {
+            pickup_location: nickname,
+            name:            String(locationData.contactName || locationData.name || 'Vendor Warehouse').slice(0, 36),
+            email:           String(locationData.email || 'vendor@example.com'),
+            phone:           String(locationData.phone || '').replace(/\D/g, '').slice(-10),
+            address:         sanitizeAddressLine1(locationData.address, locationData.city),
+            address_2:       String(locationData.address_2 || '').slice(0, 80),
+            city:            String(locationData.city || ''),
+            state:           normalizeIndianState(locationData.state || ''),
+            country:         'India',
+            pin_code:        String(locationData.pincode || locationData.zipCode || ''),
+        };
+
+        const res = await shiprocketRequest('POST', '/settings/company/addpickup', payload);
+        return {
+            success: true,
+            pickupLocationName: nickname,
+            raw: res,
+        };
+    },
+
+    // ── getPickupLocations ─────────────────────────────────────────────────
+    async getPickupLocations() {
+        const res = await shiprocketRequest('GET', '/settings/company/pickup');
+        return res?.data?.shipping_address || res?.data || [];
     },
 
     // ── refreshToken ───────────────────────────────────────────────────────

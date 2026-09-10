@@ -19,6 +19,7 @@ import {
     getVendorOrderById,
     updateVendorOrderStatus,
     createVendorShipment,
+    scheduleVendorPickup,
     getVendorShipment,
     getVendorShipmentTracking,
     getVendorShipmentLabel,
@@ -45,6 +46,7 @@ const VendorOrderDetail = () => {
     // Shipment modals & action states
     const [showShipmentModal, setShowShipmentModal] = useState(false);
     const [isCreatingShipment, setIsCreatingShipment] = useState(false);
+    const [isSchedulingPickup, setIsSchedulingPickup] = useState(false);
     const [showTrackingModal, setShowTrackingModal] = useState(false);
     const [trackingData, setTrackingData] = useState(null);
     const [loadingTracking, setLoadingTracking] = useState(false);
@@ -134,11 +136,34 @@ const VendorOrderDetail = () => {
             setShipment(payload.shipment);
             setOrder(payload.order);
             setShowShipmentModal(false);
-            toast.success('Shiprocket shipment created successfully!');
+
+            if (payload.isAwbAssigned) {
+                toast.success(res?.message || 'Shiprocket shipment created & pickup scheduled successfully!');
+            } else if (payload.isWalletLow) {
+                toast.error('Shiprocket order created, but wallet balance is low. Please recharge wallet to schedule pickup.', { duration: 6000 });
+            } else {
+                toast.success(res?.message || 'Shiprocket order registered. Courier assignment pending.');
+            }
         } catch (err) {
             toast.error(err?.response?.data?.message || err.message || 'Failed to generate shipment.');
         } finally {
             setIsCreatingShipment(false);
+        }
+    };
+
+    const handleSchedulePickup = async () => {
+        if (!order) return;
+        setIsSchedulingPickup(true);
+        try {
+            const res = await scheduleVendorPickup(order.orderId ?? order._id);
+            const payload = res?.data ?? res;
+            setShipment(payload.shipment);
+            setOrder(payload.order);
+            toast.success(res?.message || 'Courier assigned and pickup scheduled successfully!');
+        } catch (err) {
+            toast.error(err?.response?.data?.message || err.message || 'Failed to schedule pickup.');
+        } finally {
+            setIsSchedulingPickup(false);
         }
     };
 
@@ -237,9 +262,12 @@ const VendorOrderDetail = () => {
     const vendorItems = vendorItem?.items ?? [];
     const vendorSubtotal = vendorItem?.subtotal ?? 0;
 
-    const activeAwb = order?.awbCode || shipment?.awbCode || order?.externalShipmentId || shipment?.externalShipmentId;
-    const courierName = order?.courierName || shipment?.courierName || 'Shiprocket Partner';
+    const activeAwb = vendorItem?.awbCode || shipment?.awbCode || order?.awbCode || null;
+    const courierName = vendorItem?.courierName || shipment?.courierName || order?.courierName || 'Shiprocket Partner';
     const isShipmentActive = Boolean(activeAwb && shipment?.status !== 'cancelled' && shipment?.status !== 'failed');
+    const srShipmentId = shipment?.shiprocketShipmentId || vendorItem?.shiprocketShipmentId || order?.shiprocketShipmentId;
+    const isWalletLow = shipment?.pickupStatus === 'WALLET_RECHARGE_REQUIRED' || shipment?.timeline?.[0]?.status === 'WALLET_RECHARGE_REQUIRED';
+    const isPendingAssignment = Boolean(srShipmentId && !isShipmentActive);
 
     if (loading) {
         return (
@@ -308,8 +336,12 @@ const VendorOrderDetail = () => {
                                     <FiCheckCircle />
                                     Active Shipment
                                 </span>
-                            ) : (
+                            ) : isPendingAssignment ? (
                                 <span className="inline-flex items-center gap-1 px-3 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-semibold rounded-full">
+                                    {isWalletLow ? 'Wallet Recharge Required' : 'Courier Assignment Pending'}
+                                </span>
+                            ) : (
+                                <span className="inline-flex items-center gap-1 px-3 py-1 bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-xs font-semibold rounded-full">
                                     Ready for Shipment
                                 </span>
                             )}
@@ -363,6 +395,36 @@ const VendorOrderDetail = () => {
                                         className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
                                     >
                                         <FiFileText /> {downloadingDoc === 'invoice' ? 'Downloading...' : 'Invoice'}
+                                    </button>
+                                    <button
+                                        onClick={handleCancelShipment}
+                                        className="px-3.5 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-500/40 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ml-auto"
+                                    >
+                                        <FiXCircle /> Cancel Shipment
+                                    </button>
+                                </div>
+                            </div>
+                        ) : isPendingAssignment ? (
+                            <div className="space-y-4">
+                                <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-200 space-y-1">
+                                    <p className="font-semibold text-white">
+                                        Shiprocket Order Created (Shipment ID: #{srShipmentId})
+                                    </p>
+                                    <p className="text-amber-200 leading-relaxed">
+                                        {isWalletLow
+                                            ? '⚠️ Shiprocket wallet balance is low. Please recharge your Shiprocket account, then click the button below to assign courier & schedule pickup.'
+                                            : 'Order is created in Shiprocket. Click below to assign the courier partner and schedule warehouse pickup.'}
+                                    </p>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-3 pt-1">
+                                    <button
+                                        onClick={handleSchedulePickup}
+                                        disabled={isSchedulingPickup}
+                                        className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-semibold text-xs rounded-lg shadow-md transition-all flex items-center gap-2 disabled:opacity-60"
+                                    >
+                                        <FiTruck className="text-sm" />
+                                        {isSchedulingPickup ? 'Scheduling Pickup...' : 'Assign Courier & Schedule Pickup'}
                                     </button>
                                     <button
                                         onClick={handleCancelShipment}

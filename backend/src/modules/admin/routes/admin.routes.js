@@ -102,6 +102,7 @@ router.delete('/orders/:id', ...adminAuth, orderController.deleteOrder);
 
 // ─── Order Shipments (Third-Party Delivery) ───────────────────────────────────
 router.post('/orders/:id/shipment',          ...adminAuth, shipmentController.createOrderShipment);
+router.post('/orders/:id/shipment/pickup',   ...adminAuth, shipmentController.scheduleAdminPickup);
 router.post('/orders/:id/shipment/cancel',   ...adminAuth, shipmentController.cancelOrderShipment);
 router.get('/orders/:id/shipment/tracking',  ...adminAuth, shipmentController.getOrderTracking);
 router.get('/orders/:id/shipment/label',     ...adminAuth, shipmentController.getOrderLabel);

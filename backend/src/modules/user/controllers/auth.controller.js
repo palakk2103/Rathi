@@ -39,29 +39,59 @@ export const register = asyncHandler(async (req, res) => {
     const normalizedEmail = String(email || '').trim().toLowerCase();
     const normalizedPhone = String(phone || '').replace(/\D/g, '').slice(-10);
 
-    const existing = await User.findOne({ email: normalizedEmail });
-    if (existing) throw new ApiError(409, 'Email already registered.');
+    if (!normalizedPhone || normalizedPhone.length !== 10) {
+        throw new ApiError(400, 'Please provide a valid 10-digit mobile number.');
+    }
+
+    const existing = await User.findOne({
+        $or: [
+            { email: normalizedEmail },
+            { phone: normalizedPhone }
+        ]
+    });
+    if (existing) {
+        if (existing.email === normalizedEmail) throw new ApiError(409, 'Email already registered.');
+        throw new ApiError(409, 'Phone number already registered.');
+    }
 
     const user = await User.create({
         name: String(name || '').trim(),
         email: normalizedEmail,
         password,
-        ...(normalizedPhone ? { phone: normalizedPhone } : {}),
+        phone: normalizedPhone,
     });
-    await sendOTP(user, 'email_verification');
 
-    res.status(201).json(new ApiResponse(201, { email: user.email }, 'Registration successful. Please verify your email.'));
+    // Send OTP via SMS (SMS India Hub) and backup email
+    await sendOTP(user, 'phone_verification');
+
+    res.status(201).json(
+        new ApiResponse(
+            201, 
+            { email: user.email, phone: user.phone }, 
+            'Registration successful. Please verify the OTP sent to your phone number.'
+        )
+    );
 });
 
 // POST /api/user/auth/verify-otp
 export const verifyOTP = asyncHandler(async (req, res) => {
-    const { email, otp } = req.body;
-    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const { phone, email, otp } = req.body;
+    const normalizedPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
+    const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
 
-    const user = await User.findOne({ email: normalizedEmail }).select('+otp +otpExpiry');
+    let user = null;
+    if (normalizedPhone) {
+        user = await User.findOne({ phone: normalizedPhone }).select('+otp +otpExpiry');
+    } else if (normalizedEmail) {
+        user = await User.findOne({ email: normalizedEmail }).select('+otp +otpExpiry');
+    }
     if (!user) throw new ApiError(404, 'User not found.');
-    if (otp !== '123456' && user.otp !== otp) throw new ApiError(400, 'Invalid OTP.');
-    if (otp !== '123456' && user.otpExpiry < Date.now()) throw new ApiError(400, 'OTP has expired. Please request a new one.');
+
+    const isDev = process.env.NODE_ENV !== 'production';
+    const isMasterBypass = isDev && otp === '123456';
+
+    if (!isMasterBypass && user.otp !== otp) throw new ApiError(400, 'Invalid OTP.');
+    if (!isMasterBypass && user.otpExpiry < Date.now()) throw new ApiError(400, 'OTP has expired. Please request a new one.');
 
     user.isVerified = true;
     user.otp = undefined;
@@ -70,28 +100,55 @@ export const verifyOTP = asyncHandler(async (req, res) => {
 
     const { accessToken, refreshToken } = generateTokens({ id: user._id, role: 'customer', email: user.email });
     await persistRefreshSession(user, refreshToken);
-    res.status(200).json(new ApiResponse(200, { accessToken, refreshToken, user: { id: user._id, name: user.name, email: user.email } }, 'Email verified successfully.'));
+    res.status(200).json(
+        new ApiResponse(
+            200, 
+            { accessToken, refreshToken, user: { id: user._id, name: user.name, email: user.email, phone: user.phone, avatar: user.avatar } }, 
+            'Account verified successfully.'
+        )
+    );
 });
 
 // POST /api/user/auth/login
 export const login = asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
-    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const { phone, email, identifier, password } = req.body;
+    const rawIdentifier = String(phone || email || identifier || '').trim();
 
-    const user = await User.findOne({ email: normalizedEmail }).select('+password');
-    if (!user) throw new ApiError(401, 'Invalid email or password.');
+    if (!rawIdentifier) {
+        throw new ApiError(400, 'Please provide your phone number or email address.');
+    }
+
+    let query = {};
+    const digitsOnly = rawIdentifier.replace(/\D/g, '');
+    const isPhone = digitsOnly.length >= 10 && !rawIdentifier.includes('@');
+
+    if (isPhone) {
+        const normalizedPhone = digitsOnly.slice(-10);
+        query = { phone: normalizedPhone };
+    } else {
+        query = { email: rawIdentifier.toLowerCase() };
+    }
+
+    const user = await User.findOne(query).select('+password');
+    if (!user) throw new ApiError(401, 'Invalid mobile number/email or password.');
     if (!user.isActive) throw new ApiError(403, 'Your account has been deactivated.');
     if (!user.isVerified) {
-        await sendOTP(user, 'email_verification');
-        throw new ApiError(403, 'Email not verified. A new OTP has been sent to your email.');
+        await sendOTP(user, 'phone_verification');
+        throw new ApiError(403, 'Account not verified. A new verification OTP has been sent to your phone number.');
     }
 
     const isMatch = await user.comparePassword(password);
-    if (!isMatch) throw new ApiError(401, 'Invalid email or password.');
+    if (!isMatch) throw new ApiError(401, 'Invalid mobile number/email or password.');
 
     const { accessToken, refreshToken } = generateTokens({ id: user._id, role: 'customer', email: user.email });
     await persistRefreshSession(user, refreshToken);
-    res.status(200).json(new ApiResponse(200, { accessToken, refreshToken, user: { id: user._id, name: user.name, email: user.email, avatar: user.avatar } }, 'Login successful.'));
+    res.status(200).json(
+        new ApiResponse(
+            200, 
+            { accessToken, refreshToken, user: { id: user._id, name: user.name, email: user.email, phone: user.phone, avatar: user.avatar } }, 
+            'Login successful.'
+        )
+    );
 });
 
 // POST /api/user/auth/refresh
@@ -102,7 +159,7 @@ export const refresh = asyncHandler(async (req, res) => {
 
     if (!user) throw new ApiError(401, 'Invalid refresh token.');
     if (!user.isActive) throw new ApiError(403, 'Your account has been deactivated.');
-    if (!user.isVerified) throw new ApiError(403, 'Please verify your email first.');
+    if (!user.isVerified) throw new ApiError(403, 'Please verify your account first.');
 
     const tokens = await rotateRefreshSession(
         user,
@@ -134,14 +191,22 @@ export const logout = asyncHandler(async (req, res) => {
 
 // POST /api/user/auth/resend-otp
 export const resendOTP = asyncHandler(async (req, res) => {
-    const { email } = req.body;
-    const normalizedEmail = String(email || '').trim().toLowerCase();
-    const user = await User.findOne({ email: normalizedEmail });
-    if (!user) throw new ApiError(404, 'User not found.');
-    if (user.isVerified) throw new ApiError(400, 'Email already verified.');
+    const { phone, email } = req.body;
+    const normalizedPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
+    const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
 
-    await sendOTP(user, 'email_verification');
-    res.status(200).json(new ApiResponse(200, null, 'OTP resent successfully.'));
+    let user = null;
+    if (normalizedPhone) {
+        user = await User.findOne({ phone: normalizedPhone });
+    } else if (normalizedEmail) {
+        user = await User.findOne({ email: normalizedEmail });
+    }
+
+    if (!user) throw new ApiError(404, 'User not found.');
+    if (user.isVerified) throw new ApiError(400, 'Account is already verified.');
+
+    await sendOTP(user, 'phone_verification');
+    res.status(200).json(new ApiResponse(200, null, 'OTP resent successfully to your phone number.'));
 });
 
 // POST /api/user/auth/forgot-password

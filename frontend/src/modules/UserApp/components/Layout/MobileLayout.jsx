@@ -7,7 +7,7 @@ import MobileCartBar from './MobileCartBar';
 import CartDrawer from '../../../../shared/components/Cart/CartDrawer';
 import useMobileHeaderHeight from '../../hooks/useMobileHeaderHeight';
 
-const MobileLayout = ({ children, showBottomNav = true, showCartBar = true }) => {
+const MobileLayout = ({ children, showBottomNav = true, showCartBar = true, showHeader = true }) => {
   const location = useLocation();
   const headerHeight = useMobileHeaderHeight();
   // Hide header and bottom nav on login, register, and verification pages
@@ -16,17 +16,22 @@ const MobileLayout = ({ children, showBottomNav = true, showCartBar = true }) =>
     location.pathname === '/verification';
 
   const isCheckoutPage = location.pathname === '/checkout';
+  const isOrderConfirmationPage = location.pathname.startsWith('/order-confirmation');
 
   // Respect the showBottomNav prop and hide on auth pages
   const shouldShowBottomNav = showBottomNav && !isAuthPage;
   // Hide header on categories, search, wishlist, profile, and auth pages
-  const shouldShowHeader = !isAuthPage &&
+  const shouldShowHeader = showHeader &&
+    !isAuthPage &&
     location.pathname !== '/categories' &&
     location.pathname !== '/search' &&
     location.pathname !== '/wishlist' &&
     location.pathname !== '/profile' &&
     location.pathname !== '/orders' &&
-    !isCheckoutPage;
+    !isCheckoutPage &&
+    !isOrderConfirmationPage;
+
+  const shouldShowDesktopHeader = showHeader && !isAuthPage && !isCheckoutPage && !isOrderConfirmationPage;
 
   // Ensure body scroll is restored when component mounts
   useEffect(() => {
@@ -38,7 +43,7 @@ const MobileLayout = ({ children, showBottomNav = true, showCartBar = true }) =>
 
   return (
     <>
-      {!isAuthPage && !isCheckoutPage && <DesktopHeader />}
+      {shouldShowDesktopHeader && <DesktopHeader />}
       {shouldShowHeader && <MobileHeader />}
       <main
         className={`min-h-screen w-full overflow-x-hidden md:container md:mx-auto md:px-12 lg:px-24 xl:px-40 ${shouldShowBottomNav ? 'pb-20' : ''} ${showCartBar ? 'pb-24' : ''}`}

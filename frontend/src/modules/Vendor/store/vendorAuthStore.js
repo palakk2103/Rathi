@@ -32,21 +32,27 @@ export const useVendorAuthStore = create(
         }
       },
 
-      // Vendor login action
-      login: async (email, otp, rememberMe = false) => {
+      // Vendor login action — supports phone number or email + password (or OTP fallback)
+      login: async (identifier, passwordOrOtp, isOtpMode = false, rememberMe = false) => {
         set({ isLoading: true });
         try {
-          const response = await api.post("/vendor/auth/login", {
-            email,
-            otp,
-          });
+          const rawIdentifier = String(identifier || '').trim();
+          const digitsOnly = rawIdentifier.replace(/\D/g, '');
+          const isPhone = digitsOnly.length >= 10 && !rawIdentifier.includes('@');
+
+          const payload = {
+            ...(isPhone ? { phone: digitsOnly.slice(-10) } : { email: rawIdentifier.toLowerCase() }),
+            ...(isOtpMode ? { otp: passwordOrOtp } : { password: passwordOrOtp }),
+          };
+
+          const response = await api.post("/vendor/auth/login", payload);
           const authData = response?.data || {};
           const vendor = authData.vendor;
           const accessToken = authData.accessToken;
           const refreshToken = authData.refreshToken;
 
           if (!vendor || !accessToken || !refreshToken) {
-            throw new Error("Invalid login response");
+            throw new Error("Invalid login response from server");
           }
 
           set({

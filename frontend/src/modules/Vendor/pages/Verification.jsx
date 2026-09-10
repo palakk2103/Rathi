@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { FiArrowLeft, FiCheck, FiMail } from 'react-icons/fi';
+import { FiArrowLeft, FiCheck, FiPhone, FiShield } from 'react-icons/fi';
 import { motion } from 'framer-motion';
 import { verifyVendorOTP, resendVendorOTP } from '../services/vendorService';
 import toast from 'react-hot-toast';
@@ -13,15 +13,21 @@ const VendorVerification = () => {
   const [isLoading, setIsLoading] = useState(false);
   const inputRefs = useRef([]);
 
+  const phone = location.state?.phone || '';
   const email = location.state?.email || '';
+  const identifier = phone || email;
   const [resendCooldown, setResendCooldown] = useState(0);
 
   // Focus first input on mount
   useEffect(() => {
+    if (!identifier) {
+      navigate('/vendor/register', { replace: true });
+      return;
+    }
     if (inputRefs.current[0]) {
       inputRefs.current[0].focus();
     }
-  }, []);
+  }, [identifier, navigate]);
 
   const handleChange = (index, value) => {
     // Only allow single digit
@@ -59,14 +65,14 @@ const VendorVerification = () => {
     const verificationCode = codes.join('');
 
     if (verificationCode.length !== OTP_LENGTH) {
-      toast.error('Please enter the complete verification code');
+      toast.error('Please enter the complete 6-digit verification code');
       return;
     }
 
     setIsLoading(true);
     try {
-      await verifyVendorOTP(email, verificationCode);
-      toast.success('Email verified! Your account is pending admin approval.');
+      await verifyVendorOTP(identifier, verificationCode);
+      toast.success('Phone verified! Your seller account is pending admin approval.');
       navigate('/vendor/login');
     } catch {
       // Error toast is shown by api.js interceptor
@@ -76,10 +82,10 @@ const VendorVerification = () => {
   };
 
   const handleResend = async () => {
-    if (resendCooldown > 0 || !email) return;
+    if (resendCooldown > 0 || !identifier) return;
     try {
-      await resendVendorOTP(email);
-      toast.success('OTP resent! Please check your email.');
+      await resendVendorOTP(identifier);
+      toast.success(phone ? `OTP resent to +91 ${phone} via SMS` : 'OTP resent to email');
       // Start 30 second cooldown
       setResendCooldown(30);
       const timer = setInterval(() => {
@@ -103,12 +109,15 @@ const VendorVerification = () => {
         {/* Header */}
         <div className="text-center mb-8">
           <div className="w-16 h-16 gradient-green rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-glow-green">
-            <FiMail className="text-white text-2xl" />
+            <FiShield className="text-white text-2xl" />
           </div>
-          <h1 className="text-3xl font-extrabold text-gray-800 mb-2">Verify Your Email</h1>
+          <h1 className="text-3xl font-extrabold text-gray-800 mb-2">Verify Mobile Number</h1>
           <p className="text-gray-600">
-            We've sent a verification code to <br />
-            <span className="font-semibold text-gray-800">{email}</span>
+            {phone ? (
+              <>We've sent a 6-digit SMS verification code to <br /><span className="font-semibold text-gray-800">+91 {phone}</span></>
+            ) : (
+              <>We've sent a verification code to <br /><span className="font-semibold text-gray-800">{email}</span></>
+            )}
           </p>
         </div>
 
@@ -142,7 +151,7 @@ const VendorVerification = () => {
             >
               {resendCooldown > 0
                 ? `Resend in ${resendCooldown}s`
-                : "Didn't receive the code? Resend"}
+                : "Didn't receive the SMS code? Resend"}
             </button>
           </div>
 
@@ -157,7 +166,7 @@ const VendorVerification = () => {
             ) : (
               <>
                 <FiCheck />
-                Verify Email
+                Verify Phone Number
               </>
             )}
           </button>

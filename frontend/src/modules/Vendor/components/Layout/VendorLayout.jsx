@@ -1,13 +1,40 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import VendorSidebar from './VendorSidebar';
 import VendorHeader from './VendorHeader';
 import VendorBottomNav from './VendorBottomNav';
 import useAdminHeaderHeight from '../../../Admin/hooks/useAdminHeaderHeight';
+import { useVendorAuthStore } from '../../store/vendorAuthStore';
+import { connectVendorSocket, disconnectVendorSocket, subscribeToNewOrders } from '../../services/vendorSocketService';
+import { useVendorOrderModalStore } from '../../store/vendorOrderModalStore';
+import VendorNewOrderModal from '../Orders/VendorNewOrderModal';
 
 const VendorLayout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const headerHeight = useAdminHeaderHeight();
+  const { token, isAuthenticated } = useVendorAuthStore();
+  const enqueueOrder = useVendorOrderModalStore((s) => s.enqueueOrder);
+  const resetOrderModalStore = useVendorOrderModalStore((s) => s.resetStore);
+
+  // Global real-time socket listener for incoming vendor orders
+  useEffect(() => {
+    const accessToken = token || localStorage.getItem('vendor-token');
+    if (!isAuthenticated || !accessToken) {
+      disconnectVendorSocket();
+      resetOrderModalStore();
+      return;
+    }
+
+    connectVendorSocket(accessToken);
+    const unsubscribe = subscribeToNewOrders((newOrder) => {
+      console.log('📦 [Vendor Layout] Received real-time new order:', newOrder);
+      enqueueOrder(newOrder);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [token, isAuthenticated, enqueueOrder, resetOrderModalStore]);
 
   // Bottom nav height is 64px (h-16)
   const bottomNavHeight = 64;
@@ -18,6 +45,9 @@ const VendorLayout = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
+      {/* Global Real-Time New Order Modal */}
+      <VendorNewOrderModal />
+
       {/* Sidebar */}
       <VendorSidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
@@ -49,4 +79,5 @@ const VendorLayout = () => {
 };
 
 export default VendorLayout;
+
 

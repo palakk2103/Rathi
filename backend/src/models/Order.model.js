@@ -32,6 +32,24 @@ const vendorItemGroupSchema = new mongoose.Schema({
         enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'],
         default: 'pending',
     },
+
+    // ─── Vendor-level Third-Party / Shiprocket Shipment Tracking ─────────────
+    shipmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryShipment' },
+    providerName: { type: String, default: 'shiprocket' },
+    externalShipmentId: { type: String, sparse: true },
+    shiprocketOrderId: { type: String, sparse: true },
+    shiprocketShipmentId: { type: String, sparse: true },
+    awbCode: { type: String, sparse: true },
+    courierId: { type: Number },
+    courierName: { type: String },
+    trackingUrl: { type: String },
+    labelUrl: { type: String },
+    manifestUrl: { type: String },
+    invoiceUrl: { type: String },
+    pickupStatus: { type: String, default: 'PENDING' },
+    providerStatus: { type: String },
+    shipmentCreatedAt: { type: Date },
+    shipmentCancelledAt: { type: Date },
 });
 
 const orderSchema = new mongoose.Schema(

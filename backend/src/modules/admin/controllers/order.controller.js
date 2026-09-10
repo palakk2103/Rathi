@@ -9,6 +9,7 @@ import Product from '../../../models/Product.model.js';
 import { createNotification } from '../../../services/notification.service.js';
 import { updateStatsForUser } from '../../../services/codStats.service.js';
 import { processSettlementForOrder } from '../../../services/payout.service.js';
+import { sendOrderStatusEmail } from '../../../services/orderEmailNotification.service.js';
 
 // GET /api/admin/orders
 export const getAllOrders = asyncHandler(async (req, res) => {
@@ -264,6 +265,9 @@ export const updateOrderStatus = asyncHandler(async (req, res) => {
         await Promise.allSettled(notificationTasks);
     }
 
+    // Send order status email notification to customer
+    sendOrderStatusEmail(order, previousStatus, nextStatus).catch(() => {});
+
     // Trigger COD stats update when moving to delivered or cancelled
     if (order.userId && ['delivered', 'cancelled'].includes(nextStatus)) {
         updateStatsForUser(order.userId).catch(err => console.error('Error updating COD stats:', err));
@@ -298,6 +302,7 @@ export const assignDeliveryBoy = asyncHandler(async (req, res) => {
     const previousDeliveryBoyId = order.deliveryBoyId ? String(order.deliveryBoyId) : '';
     const isReassigned = previousDeliveryBoyId && previousDeliveryBoyId !== String(deliveryBoyId);
 
+    const statusBeforeAssign = order.status;
     order.deliveryBoyId = deliveryBoyId;
     if (order.status === 'pending') {
         order.status = 'processing';
@@ -309,6 +314,9 @@ export const assignDeliveryBoy = asyncHandler(async (req, res) => {
         });
     }
     await order.save();
+
+    // Send order status email if status changed due to delivery assignment
+    sendOrderStatusEmail(order, statusBeforeAssign, order.status).catch(() => {});
 
     await createNotification({
         recipientId: deliveryBoy._id,

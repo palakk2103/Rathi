@@ -8,6 +8,7 @@ import { sendEmail } from '../../../services/email.service.js';
 import { createNotification } from '../../../services/notification.service.js';
 import { updateStatsForUser } from '../../../services/codStats.service.js';
 import { processSettlementForOrder } from '../../../services/payout.service.js';
+import { sendOrderStatusEmail } from '../../../services/orderEmailNotification.service.js';
 
 const DELIVERY_OTP_TTL_MS = 10 * 60 * 1000;
 const DELIVERY_OTP_MAX_ATTEMPTS = 5;
@@ -298,6 +299,7 @@ export const updateDeliveryStatus = asyncHandler(async (req, res) => {
         order.deliveryOtpDebug = undefined;
     }
 
+    const previousDeliveryOrderStatus = order.status;
     order.status = status;
     // Keep vendor sub-order statuses aligned with delivery progression.
     if (status === 'shipped') {
@@ -380,6 +382,9 @@ export const updateDeliveryStatus = asyncHandler(async (req, res) => {
     if (statusNotificationTasks.length > 0) {
         await Promise.allSettled(statusNotificationTasks);
     }
+
+    // Send order status email notification to customer
+    sendOrderStatusEmail(order, previousDeliveryOrderStatus, status).catch(() => {});
 
     res.status(200).json(new ApiResponse(200, order, 'Delivery status updated.'));
 });

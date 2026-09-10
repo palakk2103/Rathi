@@ -339,6 +339,26 @@ const AdminOrderDetail = () => {
                     <FiXCircle /> Admin Override Cancel
                   </button>
                 </div>
+
+                {order.vendorItems && order.vendorItems.length > 1 && (
+                  <div className="mt-4 pt-3 border-t border-indigo-800/80 space-y-2">
+                    <p className="text-xs font-semibold text-indigo-300 uppercase tracking-wider">Multi-Vendor Shipments Breakdown</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {order.vendorItems.map((vi, idx) => (
+                        <div key={vi._id || idx} className="bg-black/20 p-2.5 rounded-lg border border-white/5 text-xs">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="font-semibold text-white">{vi.vendorName || `Vendor ${idx + 1}`}</span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${vi.status === 'shipped' ? 'bg-indigo-500/20 text-indigo-300' : vi.status === 'delivered' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-gray-500/20 text-gray-300'}`}>
+                              {vi.status?.toUpperCase() || 'PENDING'}
+                            </span>
+                          </div>
+                          <p className="text-indigo-200 font-mono text-[11px]">AWB: {vi.awbCode || 'Not Generated'}</p>
+                          <p className="text-gray-400 text-[11px]">Courier: {vi.courierName || 'Shiprocket Partner'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <p className="text-xs text-indigo-200 leading-relaxed">

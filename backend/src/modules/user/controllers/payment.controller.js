@@ -3,6 +3,7 @@ import ApiResponse from '../../../utils/ApiResponse.js';
 import ApiError from '../../../utils/ApiError.js';
 import Order from '../../../models/Order.model.js';
 import { verifyRazorpaySignature, verifyWebhookSignature } from '../../../services/razorpay.service.js';
+import { sendOrderStatusEmail } from '../../../services/orderEmailNotification.service.js';
 
 /**
  * Verify Razorpay payment signature after successful checkout popup
@@ -37,6 +38,7 @@ export const verifyPayment = asyncHandler(async (req, res) => {
 
     // Update payment details
     order.paymentStatus = 'paid';
+    const prevPaymentStatus = order.status;
     if (order.status === 'pending') {
         order.status = 'processing';
     }
@@ -47,6 +49,9 @@ export const verifyPayment = asyncHandler(async (req, res) => {
     }
 
     await order.save();
+
+    // Send processing email if status changed
+    sendOrderStatusEmail(order, prevPaymentStatus, order.status).catch(() => {});
 
     res.status(200).json(
         new ApiResponse(
@@ -90,6 +95,7 @@ export const handleRazorpayWebhook = asyncHandler(async (req, res) => {
             const order = await Order.findOne({ razorpayOrderId });
             if (order && order.paymentStatus !== 'paid') {
                 order.paymentStatus = 'paid';
+                const prevWebhookStatus = order.status;
                 if (order.status === 'pending') {
                     order.status = 'processing';
                 }
@@ -97,6 +103,9 @@ export const handleRazorpayWebhook = asyncHandler(async (req, res) => {
                     order.razorpayPaymentId = razorpayPaymentId;
                 }
                 await order.save();
+
+                // Send processing email if status changed
+                sendOrderStatusEmail(order, prevWebhookStatus, order.status).catch(() => {});
             }
         }
     }

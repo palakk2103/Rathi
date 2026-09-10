@@ -1,4 +1,4 @@
-import cloudinary from '../config/cloudinary.js';
+import cloudinary, { ensureCloudinaryConfig } from '../config/cloudinary.js';
 import fs from 'fs/promises';
 
 /**
@@ -9,6 +9,7 @@ import fs from 'fs/promises';
  * @returns {Promise<{url: string, publicId: string}>}
  */
 export const uploadToCloudinary = async (localFilePath, folder, publicId) => {
+    ensureCloudinaryConfig();
     const uploadOptions = { folder, resource_type: 'image' };
     if (publicId) uploadOptions.public_id = publicId;
 
@@ -30,6 +31,7 @@ export const uploadFileToCloudinary = async (
     resourceType = 'auto',
     publicId
 ) => {
+    ensureCloudinaryConfig();
     const uploadOptions = { folder, resource_type: resourceType };
     if (publicId) uploadOptions.public_id = publicId;
     const result = await cloudinary.uploader.upload(localFilePath, uploadOptions);

@@ -25,7 +25,7 @@ const Orders = () => {
   useEffect(() => {
     if (!vendorId) return;
 
-        const fetchOrders = async () => {
+    const fetchOrders = async () => {
       setIsLoading(true);
       try {
         const data = await getAllVendorOrders({ limit: 100 });
@@ -38,7 +38,17 @@ const Orders = () => {
     };
 
     fetchOrders();
+
+    const handleOrderUpdate = () => {
+      fetchOrders();
+    };
+
+    window.addEventListener('vendor-order-updated', handleOrderUpdate);
+    return () => {
+      window.removeEventListener('vendor-order-updated', handleOrderUpdate);
+    };
   }, [vendorId]);
+
 
   // Derive stat counts from real orders
   const orderStats = useMemo(() => {

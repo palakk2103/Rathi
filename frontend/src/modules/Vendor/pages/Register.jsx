@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { FiMail, FiLock, FiEye, FiEyeOff, FiUser, FiPhone, FiShoppingBag, FiMapPin, FiFileText, FiAlertTriangle } from 'react-icons/fi';
+import { FiMail, FiLock, FiEye, FiEyeOff, FiUser, FiPhone, FiShoppingBag, FiMapPin, FiFileText, FiAlertTriangle, FiHome } from 'react-icons/fi';
 import { motion } from 'framer-motion';
 import { useVendorAuthStore } from "../store/vendorAuthStore";
 import { useCategoryStore } from "../../../shared/store/categoryStore";
+import { INDIAN_STATES } from "../../../shared/constants/indianStates";
 import toast from 'react-hot-toast';
 
 const VendorRegister = () => {
@@ -15,16 +16,20 @@ const VendorRegister = () => {
     initCategories();
   }, [initCategories]);
 
+  const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     phone: '',
+    password: '',
+    confirmPassword: '',
     storeName: '',
     storeDescription: '',
     address: {
+      building: '',
       street: '',
       city: '',
-      state: '',
+      state: 'Madhya Pradesh',
       zipCode: '',
       country: 'India',
     },
@@ -106,8 +111,19 @@ const VendorRegister = () => {
     e.preventDefault();
 
     // Validation
-    if (!formData.name || !formData.email || !formData.phone || !formData.storeName) {
-      toast.error('Please fill in all required fields');
+    const cleanPhone = String(formData.phone || '').replace(/\D/g, '').slice(-10);
+    if (!formData.name || !formData.email || cleanPhone.length !== 10 || !formData.storeName) {
+      toast.error('Please fill in all required fields and a valid 10-digit phone number');
+      return;
+    }
+
+    if (!formData.password || formData.password.length < 6) {
+      toast.error('Password must be at least 6 characters long');
+      return;
+    }
+
+    if (formData.password !== formData.confirmPassword) {
+      toast.error('Passwords do not match');
       return;
     }
 
@@ -157,10 +173,24 @@ const VendorRegister = () => {
       const fd = new FormData();
       fd.append('name', formData.name.trim());
       fd.append('email', formData.email.trim().toLowerCase());
-      fd.append('phone', formData.phone.trim());
+      fd.append('phone', cleanPhone);
+      fd.append('password', formData.password);
       fd.append('storeName', formData.storeName.trim());
       fd.append('storeDescription', formData.storeDescription.trim());
-      fd.append('address', JSON.stringify(formData.address));
+      const combinedStreet = formData.address.building
+        ? `${formData.address.building.trim()}, ${formData.address.street.trim()}`
+        : formData.address.street.trim();
+
+      const normalizedAddress = {
+        ...formData.address,
+        street: combinedStreet,
+        city: formData.address.city.trim(),
+        state: formData.address.state?.trim() || 'Madhya Pradesh',
+        zipCode: formData.address.zipCode.trim(),
+        country: 'India',
+      };
+
+      fd.append('address', JSON.stringify(normalizedAddress));
       fd.append('categories', JSON.stringify(formData.categories));
       fd.append('businessType', formData.businessType);
       fd.append('panNumber', formData.panNumber.trim());
@@ -180,11 +210,11 @@ const VendorRegister = () => {
 
       const result = await registerVendor(fd);
 
-      toast.success(result.message || 'Registration successful!');
-      // Navigate to verification page
-      navigate('/vendor/verification', { state: { email: formData.email } });
+      toast.success(result.message || 'Registration submitted! OTP sent to your phone.');
+      // Navigate to verification page with phone and email
+      navigate('/vendor/verification', { state: { phone: cleanPhone, email: formData.email } });
     } catch (error) {
-      toast.error(error.message || 'Registration failed. Please try again.');
+      toast.error(error?.response?.data?.message || error.message || 'Registration failed. Please try again.');
     }
   };
 
@@ -201,14 +231,14 @@ const VendorRegister = () => {
             <FiShoppingBag className="text-white text-2xl" />
           </div>
           <h1 className="text-3xl font-extrabold text-gray-800 mb-2">Become a Vendor</h1>
-          <p className="text-gray-600">Register your store, verify your email, then await admin approval</p>
+          <p className="text-gray-600">Register your store, verify your phone via SMS OTP, then await admin approval</p>
         </div>
 
         {/* Registration Form */}
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Personal Information */}
+          {/* Personal & Account Information */}
           <div>
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">Personal Information</h3>
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">Personal & Account Information</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
@@ -248,16 +278,63 @@ const VendorRegister = () => {
 
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Phone Number <span className="text-red-500">*</span>
+                  Phone Number (for SMS OTP) <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
-                  <FiPhone className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                  <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-500 font-semibold text-sm flex items-center gap-1">
+                    <FiPhone className="text-gray-400" />
+                    +91
+                  </span>
                   <input
                     type="tel"
                     name="phone"
                     value={formData.phone}
                     onChange={handleChange}
-                    placeholder="+1234567890"
+                    placeholder="9876543210"
+                    maxLength={10}
+                    className="w-full pl-20 pr-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Set Password <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <FiLock className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    name="password"
+                    value={formData.password}
+                    onChange={handleChange}
+                    placeholder="At least 6 characters"
+                    className="w-full pl-12 pr-12 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                  >
+                    {showPassword ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Confirm Password <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <FiLock className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    name="confirmPassword"
+                    value={formData.confirmPassword}
+                    onChange={handleChange}
+                    placeholder="Re-enter your password"
                     className="w-full pl-12 pr-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400"
                     required
                   />
@@ -392,13 +469,13 @@ const VendorRegister = () => {
                   <h4 className="text-sm font-semibold text-gray-700 mb-3">GST Business Address</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
-                      <label className="block text-sm font-semibold text-gray-700 mb-2">Street Address</label>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">Street / Road Address</label>
                       <input
                         type="text"
                         name="businessAddress.street"
                         value={formData.businessAddress.street}
                         onChange={handleChange}
-                        placeholder="GST registered street address"
+                        placeholder="GST registered street / office address"
                         className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400 text-sm"
                       />
                     </div>
@@ -409,29 +486,39 @@ const VendorRegister = () => {
                         name="businessAddress.city"
                         value={formData.businessAddress.city}
                         onChange={handleChange}
-                        placeholder="City"
+                        placeholder="e.g. Indore"
                         className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400 text-sm"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-semibold text-gray-700 mb-2">State</label>
-                      <input
-                        type="text"
+                      <select
                         name="businessAddress.state"
-                        value={formData.businessAddress.state}
+                        value={formData.businessAddress.state || 'Madhya Pradesh'}
                         onChange={handleChange}
-                        placeholder="State"
-                        className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400 text-sm"
-                      />
+                        className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 text-sm font-medium">
+                        {INDIAN_STATES.map((st) => (
+                          <option key={st} value={st}>
+                            {st}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-2">Zip Code</label>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">Pincode (6 digits)</label>
                       <input
                         type="text"
                         name="businessAddress.zipCode"
+                        maxLength={6}
                         value={formData.businessAddress.zipCode}
-                        onChange={handleChange}
-                        placeholder="Zip Code"
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                          setFormData((prev) => ({
+                            ...prev,
+                            businessAddress: { ...prev.businessAddress, zipCode: val },
+                          }));
+                        }}
+                        placeholder="e.g. 452001"
                         className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400 text-sm"
                       />
                     </div>
@@ -440,10 +527,9 @@ const VendorRegister = () => {
                       <input
                         type="text"
                         name="businessAddress.country"
-                        value={formData.businessAddress.country}
-                        onChange={handleChange}
-                        placeholder="Country"
-                        className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400 text-sm"
+                        value="India"
+                        disabled
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-600 text-sm cursor-not-allowed"
                       />
                     </div>
                   </div>
@@ -562,11 +648,31 @@ const VendorRegister = () => {
 
           {/* Address Information */}
           <div>
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">Business Address</h3>
+            <h3 className="text-lg font-semibold text-gray-800 mb-1">Business / Pickup Warehouse Address</h3>
+            <p className="text-xs text-gray-500 mb-4">This address will be used by couriers for parcel pickups.</p>
+            
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="md:col-span-2">
+              <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Street Address
+                  Shop / Building / Flat No. & Floor <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <FiHome className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    name="address.building"
+                    value={formData.address.building || ''}
+                    onChange={handleChange}
+                    placeholder="e.g. Shop 12, Ground Floor"
+                    className="w-full pl-12 pr-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400 text-sm"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Road / Street / Area / Landmark <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <FiMapPin className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
@@ -575,45 +681,65 @@ const VendorRegister = () => {
                     name="address.street"
                     value={formData.address.street}
                     onChange={handleChange}
-                    placeholder="123 Main Street"
-                    className="w-full pl-12 pr-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400"
+                    placeholder="e.g. Palasia Main Road, Near Old Bus Stand"
+                    className="w-full pl-12 pr-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400 text-sm"
+                    required
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">City</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  City <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
                   name="address.city"
                   value={formData.address.city}
                   onChange={handleChange}
-                  placeholder="New York"
-                  className="w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400"
+                  placeholder="e.g. Indore"
+                  className="w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400 text-sm"
+                  required
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">State</label>
-                <input
-                  type="text"
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  State <span className="text-red-500">*</span>
+                </label>
+                <select
                   name="address.state"
-                  value={formData.address.state}
+                  value={formData.address.state || 'Madhya Pradesh'}
                   onChange={handleChange}
-                  placeholder="NY"
-                  className="w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400"
-                />
+                  required
+                  className="w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 text-sm font-medium">
+                  {INDIAN_STATES.map((st) => (
+                    <option key={st} value={st}>
+                      {st}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Zip Code</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Pincode (6 digits) <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
                   name="address.zipCode"
+                  maxLength={6}
                   value={formData.address.zipCode}
-                  onChange={handleChange}
-                  placeholder="10001"
-                  className="w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400"
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                    setFormData((prev) => ({
+                      ...prev,
+                      address: { ...prev.address, zipCode: val },
+                    }));
+                  }}
+                  placeholder="e.g. 452001"
+                  className="w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400 text-sm"
+                  required
                 />
               </div>
 
@@ -622,10 +748,9 @@ const VendorRegister = () => {
                 <input
                   type="text"
                   name="address.country"
-                  value={formData.address.country}
-                  onChange={handleChange}
-                  placeholder="USA"
-                  className="w-full px-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:outline-none focus:border-primary-500 text-gray-800 placeholder:text-gray-400"
+                  value="India"
+                  disabled
+                  className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-gray-600 text-sm cursor-not-allowed"
                 />
               </div>
             </div>
@@ -636,8 +761,7 @@ const VendorRegister = () => {
           {/* Info Message */}
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
             <p className="text-sm text-blue-800">
-              <strong>Note:</strong> You must verify your email first, then your registration will be reviewed by admin.
-              You will receive an email when your account is approved or rejected.
+              <strong>Note:</strong> You must verify your mobile number via SMS OTP first, then your seller registration will be reviewed by admin.
             </p>
           </div>
 

@@ -1,40 +1,60 @@
 import nodemailer from 'nodemailer';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const smtpPort = Number(process.env.SMTP_PORT) || 587;
-const isSecure = process.env.SMTP_SECURE === 'true' || smtpPort === 465;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: smtpPort,
-    secure: isSecure,
-    auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-    },
-    tls: {
-        rejectUnauthorized: false,
-        ciphers: 'SSLv3',
-    },
-    connectionTimeout: 10000, // 10s connection timeout
-    greetingTimeout: 10000,   // 10s greeting timeout
-    socketTimeout: 15000,     // 15s socket activity timeout
-    pool: true,               // use pooled connections for efficiency in production
-    maxConnections: 5,
-    maxMessages: 100,
-});
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config();
 
-// Verify SMTP connection on startup if SMTP_USER is set
-if (process.env.SMTP_USER) {
-    transporter.verify((error) => {
-        if (error) {
-            console.warn(`[SMTP Warning] Failed to connect to mail server (${process.env.SMTP_HOST || 'smtp.gmail.com'}:${smtpPort}):`, error.message);
-        } else {
-            console.log(`✅ [SMTP] Mail server connected successfully (${process.env.SMTP_USER})`);
-        }
+let _transporter = null;
+
+export const getTransporter = () => {
+    if (_transporter) return _transporter;
+
+    const smtpPort = Number(process.env.SMTP_PORT) || 587;
+    const isSecure = process.env.SMTP_SECURE === 'true' || smtpPort === 465;
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS ? process.env.SMTP_PASS.replace(/\s+/g, '') : '';
+
+    _transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST || 'smtp.gmail.com',
+        port: smtpPort,
+        secure: isSecure,
+        auth: {
+            user: user,
+            pass: pass,
+        },
+        tls: {
+            rejectUnauthorized: false,
+        },
+        connectionTimeout: 10000, // 10s connection timeout
+        greetingTimeout: 10000,   // 10s greeting timeout
+        socketTimeout: 15000,     // 15s socket activity timeout
+        pool: true,               // use pooled connections for efficiency in production
+        maxConnections: 5,
+        maxMessages: 100,
     });
-} else {
-    console.warn(`⚠️ [SMTP Warning] SMTP_USER is not set in environment variables! Emails will not be sent.`);
-}
+
+    if (user) {
+        _transporter.verify((error) => {
+            if (error) {
+                console.warn(`[SMTP Warning] Failed to connect to mail server (${process.env.SMTP_HOST || 'smtp.gmail.com'}:${smtpPort}):`, error.message);
+            } else {
+                console.log(`✅ [SMTP] Mail server connected successfully (${user})`);
+            }
+        });
+    } else {
+        console.warn(`⚠️ [SMTP Warning] SMTP_USER is not set in environment variables! Emails will not be sent.`);
+    }
+
+    return _transporter;
+};
+
+// Initial run
+getTransporter();
 
 
 /**
@@ -50,14 +70,9 @@ export const sendEmail = async ({ to, subject, html, text }) => {
         subject,
         html,
         text,
-        headers: {
-            'X-Priority': '1 (Highest)',
-            'X-MSMail-Priority': 'High',
-            'Importance': 'High',
-        },
     };
 
-    const info = await transporter.sendMail(mailOptions);
+    const info = await getTransporter().sendMail(mailOptions);
     return info;
 };
 
@@ -128,10 +143,10 @@ export const sendOTPEmail = async ({ to, otp, title = 'Verification Code', userT
 };
 
 export const sendOrderConfirmationEmail = async (order, userEmail) => {
-    await sendEmail({
-        to: userEmail,
-        subject: `Order Confirmed — ${order.orderId}`,
-        html: `<h2>Thank you for your order!</h2><p>Order ID: <strong>${order.orderId}</strong></p><p>Total: ₹${order.total}</p><p>Tracking: ${order.trackingNumber}</p>`,
-    });
+    const to = userEmail || order?.shippingAddress?.email || order?.guestInfo?.email;
+    if (!to) return;
+    const { getOrderStatusEmailContent } = await import('./emailTemplates/orderStatusTemplates.js');
+    const { subject, html, text } = getOrderStatusEmailContent(order, 'processing');
+    await sendEmail({ to, subject, html, text });
 };
 

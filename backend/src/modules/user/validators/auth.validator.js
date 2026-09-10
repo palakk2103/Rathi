@@ -4,21 +4,37 @@ export const registerSchema = Joi.object({
     name: Joi.string().trim().min(2).max(50).required(),
     email: Joi.string().email().lowercase().required(),
     password: Joi.string().min(6).required(),
-    phone: Joi.string().pattern(/^[0-9]{10}$/).optional(),
+    phone: Joi.string().pattern(/^[0-9]{10}$/).required().messages({
+        'string.pattern.base': 'Please enter a valid 10-digit phone number.',
+        'any.required': 'Phone number is required.'
+    }),
 });
 
 export const loginSchema = Joi.object({
-    email: Joi.string().email().required(),
+    phone: Joi.string().pattern(/^[0-9]{10}$/).optional(),
+    email: Joi.string().email().optional(),
+    identifier: Joi.string().trim().optional(),
     password: Joi.string().required(),
+}).or('phone', 'email', 'identifier').messages({
+    'object.missing': 'Please provide a phone number or email address.'
 });
 
 export const otpSchema = Joi.object({
-    email: Joi.string().email().required(),
-    otp: Joi.string().length(6).required(),
+    phone: Joi.string().pattern(/^[0-9]{10}$/).optional(),
+    email: Joi.string().email().optional(),
+    otp: Joi.string().length(6).required().messages({
+        'string.length': 'OTP must be exactly 6 digits.',
+        'any.required': 'OTP is required.'
+    }),
+}).or('phone', 'email').messages({
+    'object.missing': 'Please provide a phone number or email address.'
 });
 
 export const resendOtpSchema = Joi.object({
-    email: Joi.string().email().required(),
+    phone: Joi.string().pattern(/^[0-9]{10}$/).optional(),
+    email: Joi.string().email().optional(),
+}).or('phone', 'email').messages({
+    'object.missing': 'Please provide a phone number or email address.'
 });
 
 export const refreshTokenSchema = Joi.object({

@@ -22,6 +22,7 @@ import Order          from '../../../models/Order.model.js';
 import DeliveryShipment from '../../../models/DeliveryShipment.model.js';
 import {
     createShipment,
+    assignAwbAndPickup,
     cancelShipment,
     getTrackingInfo,
     getQuote,
@@ -29,6 +30,9 @@ import {
     refreshProviderToken,
 } from '../../delivery/deliveryManager.js';
 import shiprocketProvider from '../../delivery/providers/shiprocket/shiprocketProvider.js';
+import { sendOrderStatusEmail } from '../../../services/orderEmailNotification.service.js';
+
+import { resolveSellerPickupLocation } from '../../vendor/controllers/vendorShipment.controller.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -43,19 +47,26 @@ async function findOrder(paramId) {
     });
 }
 
-/** Build the ShipmentContext from an Order document. */
-function buildContext(order, overrides = {}) {
+/**
+ * Builds the unified ShipmentContext object from an Order document.
+ * Includes dimensions, package attributes, pickup warehouse info, and item list.
+ */
+async function buildContext(order, overrides = {}) {
     const addr = order.shippingAddress || {};
+    const firstVendorId = (order.vendorItems || [])[0]?.vendorId || null;
+    const pickup = overrides.pickup || (firstVendorId ? await resolveSellerPickupLocation(firstVendorId) : null);
+
     return {
         orderId:         order.orderId,
+        parentOrderId:   order.orderId,
         orderMongoId:    String(order._id),
-        pickup: {
-            name:    process.env.PICKUP_NAME    || 'work',
-            phone:   process.env.PICKUP_PHONE   || '',
-            address: process.env.PICKUP_ADDRESS || '',
-            city:    process.env.PICKUP_CITY    || '',
-            state:   process.env.PICKUP_STATE   || '',
-            pincode: process.env.PICKUP_PINCODE || '',
+        pickup:          pickup || {
+            name:    process.env.SHIPROCKET_PICKUP_NAME    || 'Main Warehouse',
+            phone:   process.env.SHIPROCKET_PICKUP_PHONE   || '9999999999',
+            address: process.env.SHIPROCKET_PICKUP_ADDRESS || 'Warehouse address',
+            city:    process.env.SHIPROCKET_PICKUP_CITY    || 'Delhi',
+            state:   process.env.SHIPROCKET_PICKUP_STATE   || 'Delhi',
+            pincode: process.env.SHIPROCKET_PICKUP_PINCODE || '110001',
         },
         drop: {
             name:    addr.name    || '',
@@ -67,17 +78,19 @@ function buildContext(order, overrides = {}) {
             pincode: addr.zipCode || '',
         },
         items: (order.items || []).map((item) => ({
-            name:   item.name  || 'Item',
-            sku:    String(item.productId || ''),
-            qty:    item.quantity  || 1,
-            weight: 0.5,           // default per item; override via overrides.items
-            value:  item.price     || 0,
+            name:  item.name  || 'Item',
+            sku:   String(item.productId || ''),
+            qty:   item.quantity  || 1,
+            value: item.price     || 0,
         })),
-        paymentMode:  String(order.paymentMethod || 'PREPAID').toUpperCase() === 'COD' ? 'COD' : 'PREPAID',
-        totalValue:   Number(order.total   || order.subtotal || 0),
-        weight:       Number(overrides.weight || 0.5),
-        idempotencyKey: `shipment:create:${order.orderId}:${overrides.providerName || getActiveProviderName()}`,
-        ...overrides,
+        paymentMode: String(order.paymentMethod || 'PREPAID').toUpperCase() === 'COD' ? 'COD' : 'PREPAID',
+        totalValue:  Number(order.total || 0),
+        weight:      Number(overrides.weight  || 0.5),
+        length:      Number(overrides.length  || 10),
+        breadth:     Number(overrides.breadth || 10),
+        height:      Number(overrides.height  || 5),
+        preferredProvider: overrides.provider || null,
+        idempotencyKey: `shipment:admin:${order.orderId}:${getActiveProviderName()}`,
     };
 }
 
@@ -100,7 +113,7 @@ export const createOrderShipment = asyncHandler(async (req, res) => {
         throw new ApiError(409, `A shipment already exists for order ${order.orderId} (status: ${existing.status}).`);
     }
 
-    const context  = buildContext(order, req.body);
+    const context  = await buildContext(order, req.body);
     const providerName = context.preferredProvider || getActiveProviderName();
 
     let shipmentResult;
@@ -118,35 +131,129 @@ export const createOrderShipment = asyncHandler(async (req, res) => {
         throw new ApiError(502, `Provider error (${providerName}): ${err.message}`);
     }
 
+    const isAwbAssigned = Boolean(shipmentResult.isAwbAssigned && shipmentResult.awbCode);
+    const resolvedPickupStatus = shipmentResult.pickupStatus || (isAwbAssigned ? 'SCHEDULED' : 'PENDING');
+    const resolvedProviderStatus = shipmentResult.providerStatus || (isAwbAssigned ? 'PICKUP SCHEDULED' : 'CREATED');
+
     // Persist shipment record
     const shipment = await DeliveryShipment.create({
-        orderId:            order.orderId,
-        orderMongoId:       order._id,
+        orderId:              order.orderId,
+        orderMongoId:         order._id,
         providerName,
-        externalShipmentId: shipmentResult.externalId   || null,
-        trackingUrl:        shipmentResult.trackingUrl   || null,
-        label:              shipmentResult.label         || null,
-        status:             'created',
-        shipmentCreatedAt:  new Date(),
-        idempotencyKey:     context.idempotencyKey,
+        externalShipmentId:   shipmentResult.externalId           || null,
+        shiprocketOrderId:    shipmentResult.shiprocketOrderId    || order.orderId,
+        shiprocketShipmentId: shipmentResult.shiprocketShipmentId || null,
+        awbCode:              shipmentResult.awbCode              || null,
+        courierId:            shipmentResult.courierId            || null,
+        courierName:          shipmentResult.courierName          || null,
+        trackingUrl:          shipmentResult.trackingUrl          || null,
+        labelUrl:             shipmentResult.labelUrl             || null,
+        label:                shipmentResult.label                || null,
+        status:               'created',
+        pickupStatus:         resolvedPickupStatus,
+        pickupScheduledDate:  shipmentResult.pickupScheduledDate  || null,
+        shipmentCreatedAt:    new Date(),
+        idempotencyKey:       context.idempotencyKey,
         timeline: [{
-            status:    shipmentResult.providerStatus || 'CREATED',
+            status:    resolvedProviderStatus,
             timestamp: new Date(),
         }],
     });
 
     // Update Order with provider info
-    order.providerName         = providerName;
-    order.externalShipmentId   = shipmentResult.externalId || null;
-    order.trackingUrl          = shipmentResult.trackingUrl || null;
-    order.providerStatus       = shipmentResult.providerStatus || null;
-    order.shipmentCreatedAt    = new Date();
-    if (order.status === 'pending') {
+    order.providerName          = providerName;
+    order.externalShipmentId    = shipmentResult.externalId || null;
+    order.awbCode               = shipmentResult.awbCode || null;
+    order.courierId             = shipmentResult.courierId || null;
+    order.courierName           = shipmentResult.courierName || null;
+    order.shiprocketOrderId    = shipmentResult.shiprocketOrderId || order.orderId;
+    order.shiprocketShipmentId = shipmentResult.shiprocketShipmentId || null;
+    order.trackingUrl           = shipmentResult.trackingUrl || null;
+    order.labelUrl              = shipmentResult.labelUrl || null;
+    order.providerStatus        = resolvedProviderStatus;
+    order.pickupStatus          = resolvedPickupStatus;
+    order.shipmentCreatedAt     = new Date();
+
+    const prevAdminShipmentStatus = order.status;
+    if (isAwbAssigned) {
+        order.status = 'shipped';
+    } else if (order.status === 'pending') {
         order.status = 'processing';
     }
     await order.save();
 
-    res.status(201).json(new ApiResponse(201, { order, shipment, providerResult: shipmentResult }, 'Shipment created successfully.'));
+    // Send email notification if order status changed
+    if (isAwbAssigned) {
+        sendOrderStatusEmail(order, prevAdminShipmentStatus, order.status).catch(() => {});
+    }
+
+    const responseMsg = isAwbAssigned
+        ? `Shiprocket shipment created & pickup scheduled with ${shipmentResult.courierName || 'assigned courier'}.`
+        : (shipmentResult.warning || 'Shipment registered. Courier assignment pending.');
+
+    res.status(201).json(new ApiResponse(201, { order, shipment, providerResult: shipmentResult, isAwbAssigned, isWalletLow: shipmentResult.isWalletLow }, responseMsg));
+});
+
+// ─── POST /api/admin/orders/:id/shipment/pickup ───────────────────────────────
+export const scheduleAdminPickup = asyncHandler(async (req, res) => {
+    const order = await findOrder(req.params.id);
+    if (!order) throw new ApiError(404, 'Order not found.');
+
+    const shipment = await DeliveryShipment.findOne({
+        $or: [{ orderId: order.orderId }, { orderMongoId: order._id }],
+        status: { $nin: ['cancelled'] },
+    });
+
+    const srShipmentId = shipment?.shiprocketShipmentId || order.shiprocketShipmentId;
+    const srOrderId = shipment?.shiprocketOrderId || order.shiprocketOrderId;
+
+    if (!srShipmentId) {
+        throw new ApiError(400, 'No existing Shiprocket shipment found. Please create shipment first.');
+    }
+
+    const context = await buildContext(order, req.body);
+    context.shipmentId = Number(srShipmentId);
+    context.orderId = srOrderId || order.orderId;
+
+    const shipmentResult = await assignAwbAndPickup(context);
+
+    if (!shipmentResult.isAwbAssigned || !shipmentResult.awbCode) {
+        throw new ApiError(422, shipmentResult.warning || 'Failed to assign courier and schedule pickup.');
+    }
+
+    // Update DeliveryShipment record
+    if (shipment) {
+        shipment.awbCode = shipmentResult.awbCode;
+        shipment.courierId = shipmentResult.courierId || shipment.courierId;
+        shipment.courierName = shipmentResult.courierName || shipment.courierName;
+        shipment.trackingUrl = shipmentResult.trackingUrl || shipment.trackingUrl;
+        shipment.labelUrl = shipmentResult.labelUrl || shipment.labelUrl;
+        shipment.pickupStatus = shipmentResult.pickupStatus || 'SCHEDULED';
+        shipment.pickupScheduledDate = shipmentResult.pickupScheduledDate || new Date();
+        shipment.timeline.push({
+            status: shipmentResult.providerStatus || 'PICKUP SCHEDULED',
+            timestamp: new Date(),
+        });
+        await shipment.save();
+    }
+
+    order.awbCode = shipmentResult.awbCode;
+    order.courierId = shipmentResult.courierId || order.courierId;
+    order.courierName = shipmentResult.courierName || order.courierName;
+    order.trackingUrl = shipmentResult.trackingUrl || order.trackingUrl;
+    order.labelUrl = shipmentResult.labelUrl || order.labelUrl;
+    order.providerStatus = 'PICKUP SCHEDULED';
+    order.pickupStatus = 'SCHEDULED';
+
+    const prevStatus = order.status;
+    order.status = 'shipped';
+    await order.save();
+
+    sendOrderStatusEmail(order, prevStatus, order.status).catch(() => {});
+
+    res.status(200).json(
+        new ApiResponse(200, { order, shipment, shipmentResult }, 'Courier assigned and pickup scheduled successfully!')
+    );
 });
 
 // ─── POST /api/admin/orders/:id/shipment/cancel ───────────────────────────────
@@ -164,8 +271,9 @@ export const cancelOrderShipment = asyncHandler(async (req, res) => {
         status: { $nin: ['cancelled', 'failed'] },
     });
 
+    const baseCtx = await buildContext(order);
     const context = {
-        ...buildContext(order),
+        ...baseCtx,
         externalShipmentId: order.externalShipmentId || shipment?.externalShipmentId,
         shiprocketOrderId:  shipment?.shiprocketOrderId,
     };
@@ -196,8 +304,9 @@ export const getOrderTracking = asyncHandler(async (req, res) => {
         throw new ApiError(404, 'No shipment created yet for this order.');
     }
 
+    const baseCtx = await buildContext(order);
     const context = {
-        ...buildContext(order),
+        ...baseCtx,
         externalShipmentId: order.externalShipmentId,
     };
 
@@ -217,7 +326,7 @@ export const getOrderQuote = asyncHandler(async (req, res) => {
     const order = await findOrder(req.params.id);
     if (!order) throw new ApiError(404, 'Order not found.');
 
-    const context = buildContext(order, req.query);
+    const context = await buildContext(order, req.query);
     const quote   = await getQuote(context);
 
     res.status(200).json(new ApiResponse(200, quote, 'Quote fetched.'));
@@ -229,13 +338,13 @@ export const getOrderShipment = asyncHandler(async (req, res) => {
     const order = await findOrder(req.params.id);
     if (!order) throw new ApiError(404, 'Order not found.');
 
-    const shipment = await DeliveryShipment.findOne({
+    const shipments = await DeliveryShipment.find({
         $or: [{ orderId: order.orderId }, { orderMongoId: order._id }],
-    }).lean();
+    }).sort({ createdAt: 1 }).lean();
 
-    if (!shipment) throw new ApiError(404, 'No shipment record found for this order.');
+    const shipment = shipments.length > 0 ? shipments[0] : null;
 
-    res.status(200).json(new ApiResponse(200, { order, shipment }, 'Shipment fetched.'));
+    res.status(200).json(new ApiResponse(200, { order, shipment, shipments }, 'Shipment fetched.'));
 });
 
 // ─── GET /api/admin/orders/:id/shipment/label ─────────────────────────────────

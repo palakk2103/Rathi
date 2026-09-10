@@ -12,17 +12,25 @@ export const useAuthStore = create(
       isAuthenticated: false,
       isLoading: false,
       pendingEmail: null,
+      pendingPhone: null,
 
-      // Login action
-      login: async (email, password, rememberMe = false) => {
+      // Login action (supports phone number or email + password)
+      login: async (identifier, password, rememberMe = false) => {
         set({ isLoading: true });
         try {
-          const normalizedEmail = String(email || '').trim().toLowerCase();
-          const response = await api.post('/user/auth/login', { email: normalizedEmail, password });
-          const payload = response?.data ?? response;
-          const accessToken = payload?.accessToken;
-          const refreshToken = payload?.refreshToken;
-          const user = payload?.user;
+          const rawIdentifier = String(identifier || '').trim();
+          const digitsOnly = rawIdentifier.replace(/\D/g, '');
+          const isPhone = digitsOnly.length >= 10 && !rawIdentifier.includes('@');
+
+          const payload = isPhone
+            ? { phone: digitsOnly.slice(-10), password }
+            : { email: rawIdentifier.toLowerCase(), password };
+
+          const response = await api.post('/user/auth/login', payload);
+          const resData = response?.data ?? response;
+          const accessToken = resData?.accessToken;
+          const refreshToken = resData?.refreshToken;
+          const user = resData?.user;
 
           if (!accessToken || !refreshToken || !user) {
             throw new Error('Invalid login response from server.');
@@ -34,6 +42,7 @@ export const useAuthStore = create(
             refreshToken,
             isAuthenticated: true,
             pendingEmail: null,
+            pendingPhone: null,
             isLoading: false,
           });
 
@@ -52,10 +61,15 @@ export const useAuthStore = create(
             ''
           ).toLowerCase();
           if (
-            backendMessage.includes('email not verified') ||
-            backendMessage.includes('verify your email')
+            backendMessage.includes('not verified') ||
+            backendMessage.includes('verify your')
           ) {
-            set({ pendingEmail: normalizedEmail, isLoading: false });
+            const digits = String(identifier || '').replace(/\D/g, '');
+            if (digits.length >= 10) {
+              set({ pendingPhone: digits.slice(-10), isLoading: false });
+            } else {
+              set({ pendingEmail: String(identifier || '').trim().toLowerCase(), isLoading: false });
+            }
             throw error;
           }
           set({ isLoading: false });
@@ -63,16 +77,17 @@ export const useAuthStore = create(
         }
       },
 
-      // Register action
+      // Register action (stores pendingPhone and dispatches SMS OTP)
       register: async (name, email, password, phone) => {
         set({ isLoading: true });
         try {
           const normalizedPhone = String(phone || '').replace(/\D/g, '').slice(-10);
+          const normalizedEmail = String(email || '').trim().toLowerCase();
           const payload = {
             name,
-            email,
+            email: normalizedEmail,
             password,
-            ...(normalizedPhone ? { phone: normalizedPhone } : {}),
+            phone: normalizedPhone,
           };
 
           await api.post('/user/auth/register', payload);
@@ -82,14 +97,15 @@ export const useAuthStore = create(
             token: null,
             refreshToken: null,
             isAuthenticated: false,
-            pendingEmail: email,
+            pendingEmail: normalizedEmail,
+            pendingPhone: normalizedPhone,
             isLoading: false,
           });
 
           localStorage.removeItem('token');
           localStorage.removeItem('refresh-token');
 
-          return { success: true, email };
+          return { success: true, email: normalizedEmail, phone: normalizedPhone };
         } catch (error) {
           set({ isLoading: false });
           throw error;
@@ -103,7 +119,7 @@ export const useAuthStore = create(
           const normalizedPhone = String(phone || '').replace(/\D/g, '').slice(-10);
           const response = await api.post('/user/auth/send-otp-phone', { phone: normalizedPhone });
           const payload = response?.data ?? response;
-          set({ isLoading: false });
+          set({ isLoading: false, pendingPhone: normalizedPhone });
           return { success: true, phone: normalizedPhone, debugOtp: payload?.debugOtp };
         } catch (error) {
           set({ isLoading: false });
@@ -118,7 +134,7 @@ export const useAuthStore = create(
           const normalizedEmail = String(email || '').trim().toLowerCase();
           const response = await api.post('/user/auth/send-otp-email', { email: normalizedEmail });
           const payload = response?.data ?? response;
-          set({ isLoading: false });
+          set({ isLoading: false, pendingEmail: normalizedEmail });
           return { success: true, email: normalizedEmail, debugOtp: payload?.debugOtp };
         } catch (error) {
           set({ isLoading: false });
@@ -147,6 +163,7 @@ export const useAuthStore = create(
             refreshToken,
             isAuthenticated: true,
             pendingEmail: null,
+            pendingPhone: null,
             isLoading: false,
           });
 
@@ -183,6 +200,7 @@ export const useAuthStore = create(
             refreshToken,
             isAuthenticated: true,
             pendingEmail: null,
+            pendingPhone: null,
             isLoading: false,
           });
 
@@ -194,22 +212,28 @@ export const useAuthStore = create(
 
           return { success: true, user };
         } catch (error) {
-
           set({ isLoading: false });
           throw error;
         }
       },
 
-      // Verify OTP and complete login
-      verifyOTP: async (email, otp) => {
+      // Verify OTP and complete login (supports phone or email)
+      verifyOTP: async (identifier, otp) => {
         set({ isLoading: true });
         try {
-          const normalizedEmail = String(email || '').trim().toLowerCase();
-          const response = await api.post('/user/auth/verify-otp', { email: normalizedEmail, otp });
-          const payload = response?.data ?? response;
-          const accessToken = payload?.accessToken;
-          const refreshToken = payload?.refreshToken;
-          const user = payload?.user;
+          const rawIdentifier = String(identifier || '').trim();
+          const digitsOnly = rawIdentifier.replace(/\D/g, '');
+          const isPhone = digitsOnly.length >= 10 && !rawIdentifier.includes('@');
+
+          const payload = isPhone
+            ? { phone: digitsOnly.slice(-10), otp }
+            : { email: rawIdentifier.toLowerCase(), otp };
+
+          const response = await api.post('/user/auth/verify-otp', payload);
+          const resData = response?.data ?? response;
+          const accessToken = resData?.accessToken;
+          const refreshToken = resData?.refreshToken;
+          const user = resData?.user;
 
           if (!accessToken || !refreshToken || !user) {
             throw new Error('Invalid OTP verification response from server.');
@@ -221,6 +245,7 @@ export const useAuthStore = create(
             refreshToken,
             isAuthenticated: true,
             pendingEmail: null,
+            pendingPhone: null,
             isLoading: false,
           });
 
@@ -237,12 +262,19 @@ export const useAuthStore = create(
         }
       },
 
-      // Resend OTP
-      resendOTP: async (email) => {
+      // Resend OTP (supports phone or email)
+      resendOTP: async (identifier) => {
         set({ isLoading: true });
         try {
-          const normalizedEmail = String(email || '').trim().toLowerCase();
-          await api.post('/user/auth/resend-otp', { email: normalizedEmail });
+          const rawIdentifier = String(identifier || '').trim();
+          const digitsOnly = rawIdentifier.replace(/\D/g, '');
+          const isPhone = digitsOnly.length >= 10 && !rawIdentifier.includes('@');
+
+          const payload = isPhone
+            ? { phone: digitsOnly.slice(-10) }
+            : { email: rawIdentifier.toLowerCase() };
+
+          await api.post('/user/auth/resend-otp', payload);
           set({ isLoading: false });
           return { success: true };
         } catch (error) {
@@ -396,13 +428,20 @@ export const useAuthStore = create(
         if (token) {
           const storedState = JSON.parse(localStorage.getItem('auth-storage') || '{}');
           const refreshToken = localStorage.getItem('refresh-token');
-          if (storedState.state?.user) {
+          const user = storedState.state?.user;
+          const role = String(user?.role || 'customer').toLowerCase();
+          if (user && role === 'customer') {
             set({
-              user: storedState.state.user,
+              user,
               token,
               refreshToken: refreshToken || null,
               isAuthenticated: true,
             });
+          } else if (user && role !== 'customer') {
+            localStorage.removeItem('token');
+            localStorage.removeItem('refresh-token');
+            localStorage.removeItem('auth-storage');
+            set({ user: null, token: null, refreshToken: null, isAuthenticated: false });
           }
         }
       },

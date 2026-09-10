@@ -41,7 +41,17 @@ const AllOrders = () => {
     };
 
     fetchOrders();
+
+    const handleOrderUpdate = () => {
+      fetchOrders();
+    };
+
+    window.addEventListener('vendor-order-updated', handleOrderUpdate);
+    return () => {
+      window.removeEventListener('vendor-order-updated', handleOrderUpdate);
+    };
   }, [vendorId]);
+
 
   const filteredOrders = useMemo(() => {
     let filtered = orders;

@@ -296,8 +296,14 @@ const AppRoutes = () => {
       <Route
         path="/register"
         element={
-          <Navigate to="/login" replace />
+          <RouteWrapper>
+            <MobileRegister />
+          </RouteWrapper>
         }
+      />
+      <Route
+        path="/signup"
+        element={<Navigate to="/register" replace />}
       />
       <Route
         path="/verification"

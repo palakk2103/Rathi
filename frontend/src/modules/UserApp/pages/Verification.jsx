@@ -11,25 +11,24 @@ const MobileVerification = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const { verifyOTP, resendOTP, pendingEmail, isLoading } = useAuthStore();
+  const { verifyOTP, resendOTP, pendingPhone, pendingEmail, isLoading } = useAuthStore();
   const [codes, setCodes] = useState(['', '', '', '', '', '']);
   const inputRefs = useRef([]);
 
-  const email =
-    String(location.state?.email || pendingEmail || searchParams.get('email') || '')
-      .trim()
-      .toLowerCase();
+  const phone = String(location.state?.phone || pendingPhone || searchParams.get('phone') || '').trim();
+  const email = String(location.state?.email || pendingEmail || searchParams.get('email') || '').trim().toLowerCase();
+  const identifier = phone || email;
 
   // Focus first input on mount
   useEffect(() => {
-    if (!email) {
+    if (!identifier) {
       navigate('/register', { replace: true });
       return;
     }
     if (inputRefs.current[0]) {
       inputRefs.current[0].focus();
     }
-  }, [email, navigate]);
+  }, [identifier, navigate]);
 
   const handleChange = (index, value) => {
     // Only allow single digit
@@ -67,26 +66,26 @@ const MobileVerification = () => {
     const verificationCode = codes.join('');
 
     if (verificationCode.length !== codes.length) {
-      toast.error('Please enter the complete verification code');
+      toast.error('Please enter the complete 6-digit verification code');
       return;
     }
 
     try {
-      await verifyOTP(email, verificationCode);
-      toast.success('Verification successful!');
+      await verifyOTP(identifier, verificationCode);
+      toast.success('Account verified successfully!');
       navigate('/home');
     } catch (error) {
-      toast.error('Invalid verification code. Please try again.');
+      toast.error(error?.response?.data?.message || 'Invalid verification code. Please try again.');
     }
   };
 
   const handleResend = async () => {
-    if (!email) return;
+    if (!identifier) return;
     try {
-      await resendOTP(email);
-      toast.success('Verification code sent to your email');
+      await resendOTP(identifier);
+      toast.success(phone ? `Verification code resent to +91 ${phone}` : `Verification code resent to ${email}`);
     } catch (error) {
-      toast.error(error?.message || 'Failed to resend code. Please try again.');
+      toast.error(error?.response?.data?.message || error?.message || 'Failed to resend code. Please try again.');
     }
   };
 
@@ -112,7 +111,7 @@ const MobileVerification = () => {
 
               {/* Header */}
               <div className="text-center mb-8">
-                <h1 className="text-2xl font-bold text-gray-900 mb-6">Verification</h1>
+                <h1 className="text-2xl font-bold text-gray-900 mb-6">Phone Verification</h1>
 
                 {/* Verification Icon */}
                 <div className="flex justify-center mb-6">
@@ -127,10 +126,13 @@ const MobileVerification = () => {
                   </div>
                 </div>
 
-                <h2 className="text-xl font-semibold text-gray-900 mb-2">Verification code</h2>
+                <h2 className="text-xl font-semibold text-gray-900 mb-2">Enter Verification Code</h2>
                 <p className="text-sm text-gray-600">
-                  Enter the verification code we've sent to your{' '}
-                  <span className="font-medium text-gray-900">{email || 'email'}</span>
+                  {phone ? (
+                    <>Enter the 6-digit SMS OTP sent to <strong className="text-gray-900">+91 {phone}</strong></>
+                  ) : (
+                    <>Enter the 6-digit code sent to <strong className="text-gray-900">{email}</strong></>
+                  )}
                 </p>
               </div>
 

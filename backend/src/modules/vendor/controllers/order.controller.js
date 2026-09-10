@@ -7,6 +7,7 @@ import Settlement from '../../../models/Settlement.model.js';
 import mongoose from 'mongoose';
 import { createNotification } from '../../../services/notification.service.js';
 import { processSettlementForOrder } from '../../../services/payout.service.js';
+import { sendOrderStatusEmail } from '../../../services/orderEmailNotification.service.js';
 
 const deriveTopLevelOrderStatus = (vendorItems = [], fallback = 'pending') => {
     const statuses = (vendorItems || [])
@@ -94,8 +95,12 @@ export const updateOrderStatus = asyncHandler(async (req, res) => {
     order.vendorItems = order.vendorItems.map((vi) =>
         vi.vendorId.toString() === req.user.id ? { ...vi.toObject(), status } : vi
     );
+    const previousOrderStatus = String(order.status || 'pending').toLowerCase();
     order.status = deriveTopLevelOrderStatus(order.vendorItems, order.status);
     await order.save();
+
+    // Send email notification if top-level order status changed
+    sendOrderStatusEmail(order, previousOrderStatus, order.status).catch(() => {});
 
     if (order.status === 'delivered') {
         try {

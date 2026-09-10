@@ -40,7 +40,7 @@ const MobileOrderConfirmation = () => {
   if (isResolving) {
     return (
       <PageTransition>
-        <MobileLayout showBottomNav={false} showCartBar={false}>
+        <MobileLayout showHeader={false} showBottomNav={false} showCartBar={false}>
           <div className="flex items-center justify-center min-h-[60vh] px-4">
             <p className="text-gray-600">Loading order...</p>
           </div>
@@ -52,7 +52,7 @@ const MobileOrderConfirmation = () => {
   if (!order) {
     return (
       <PageTransition>
-        <MobileLayout showBottomNav={false} showCartBar={false}>
+        <MobileLayout showHeader={false} showBottomNav={false} showCartBar={false}>
           <div className="flex items-center justify-center min-h-[60vh] px-4">
             <div className="text-center">
               <h2 className="text-xl font-bold text-gray-800 mb-4">Order Not Found</h2>
@@ -85,7 +85,7 @@ const MobileOrderConfirmation = () => {
 
   return (
     <PageTransition>
-      <MobileLayout showBottomNav={false} showCartBar={false}>
+      <MobileLayout showHeader={false} showBottomNav={false} showCartBar={false}>
         <div className="w-full min-h-screen flex items-center justify-center px-4 py-8 bg-gray-50">
           <div className="w-full max-w-md lg:max-w-lg">
             {/* Success Animation */}

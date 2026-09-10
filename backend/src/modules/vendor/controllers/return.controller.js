@@ -8,6 +8,7 @@ import Commission from '../../../models/Commission.model.js';
 import User from '../../../models/User.model.js';
 import Admin from '../../../models/Admin.model.js';
 import { createNotification } from '../../../services/notification.service.js';
+import { sendOrderStatusEmail } from '../../../services/orderEmailNotification.service.js';
 
 const enrichReturnItems = (request) => {
     const orderItems = Array.isArray(request?.orderId?.items) ? request.orderId.items : [];
@@ -223,8 +224,10 @@ export const updateVendorReturnRequestStatus = asyncHandler(async (req, res) => 
                 const isSingleVendorOrder = uniqueVendorIds.length <= 1;
 
                 if (status === 'approved' && isSingleVendorOrder && !['cancelled', 'returned'].includes(order.status)) {
+                    const prevVendorReturnStatus = order.status;
                     order.status = 'returned';
                     await order.save();
+                    sendOrderStatusEmail(order, prevVendorReturnStatus, 'returned').catch(() => {});
                 }
                 if (status === 'completed') {
                     const stockRestores = (request.items || []).map(async (item) => {
@@ -271,11 +274,15 @@ export const updateVendorReturnRequestStatus = asyncHandler(async (req, res) => 
                         uniqueVendorIds.length > 0 && uniqueVendorIds.every((vendorId) => completedVendorSet.has(vendorId));
 
                     if (allVendorsCompleted) {
+                        const prevMultiReturnStatus = order.status;
                         if (order.status !== 'cancelled') {
                             order.status = 'returned';
                         }
                         order.paymentStatus = 'refunded';
                         await order.save();
+                        if (prevMultiReturnStatus !== order.status) {
+                            sendOrderStatusEmail(order, prevMultiReturnStatus, order.status).catch(() => {});
+                        }
                     }
                 }
             }

@@ -16,19 +16,33 @@ export const registerVendor = (data) => {
 };
 
 /**
- * Verify email OTP after registration
- * @param {string} email
+ * Verify phone/email OTP after registration
+ * @param {string} identifier (phone or email)
  * @param {string} otp
  */
-export const verifyVendorOTP = (email, otp) =>
-    api.post('/vendor/auth/verify-otp', { email, otp });
+export const verifyVendorOTP = (identifier, otp) => {
+    const raw = String(identifier || '').trim();
+    const digitsOnly = raw.replace(/\D/g, '');
+    const isPhone = digitsOnly.length >= 10 && !raw.includes('@');
+    const payload = isPhone
+        ? { phone: digitsOnly.slice(-10), otp }
+        : { email: raw.toLowerCase(), otp };
+    return api.post('/vendor/auth/verify-otp', payload);
+};
 
 /**
- * Resend OTP to vendor email (vendor must still be unverified)
- * @param {string} email
+ * Resend OTP to vendor phone/email
+ * @param {string} identifier (phone or email)
  */
-export const resendVendorOTP = (email) =>
-    api.post('/vendor/auth/resend-otp', { email });
+export const resendVendorOTP = (identifier) => {
+    const raw = String(identifier || '').trim();
+    const digitsOnly = raw.replace(/\D/g, '');
+    const isPhone = digitsOnly.length >= 10 && !raw.includes('@');
+    const payload = isPhone
+        ? { phone: digitsOnly.slice(-10) }
+        : { email: raw.toLowerCase() };
+    return api.post('/vendor/auth/resend-otp', payload);
+};
 
 /**
  * Request reset OTP for vendor forgot password flow
@@ -243,6 +257,14 @@ export const updateVendorOrderStatus = (orderId, status) =>
  */
 export const createVendorShipment = (orderId, payload = {}) =>
     api.post(`/vendor/orders/${orderId}/shipment`, payload);
+
+/**
+ * Assign courier and schedule pickup for an existing Shiprocket order
+ * @param {string} orderId
+ * @param {object} [payload]
+ */
+export const scheduleVendorPickup = (orderId, payload = {}) =>
+    api.post(`/vendor/orders/${orderId}/shipment/pickup`, payload);
 
 /**
  * Get shipment details for a vendor order
@@ -582,6 +604,44 @@ export const updateVendorShippingRate = (id, payload) =>
  */
 export const deleteVendorShippingRate = (id) =>
     api.delete(`/vendor/shipping/rates/${id}`);
+
+
+// ─── PICKUP LOCATIONS (WAREHOUSE) ──────────────────────────────────────────────
+
+/**
+ * Get all registered pickup warehouse locations for authenticated vendor
+ */
+export const getVendorPickupLocations = () =>
+    api.get('/vendor/pickup-locations');
+
+/**
+ * Create a new pickup warehouse location (auto-syncs to Shiprocket)
+ * @param {{ name: string, address: string, address_2?: string, city: string, state: string, zipCode: string, country?: string, phone?: string, email?: string, isDefault?: boolean, operatingHours?: object }} data
+ */
+export const createVendorPickupLocation = (data) =>
+    api.post('/vendor/pickup-locations', data);
+
+/**
+ * Update an existing pickup warehouse location
+ * @param {string} id
+ * @param {object} data
+ */
+export const updateVendorPickupLocation = (id, data) =>
+    api.put(`/vendor/pickup-locations/${id}`, data);
+
+/**
+ * Delete a pickup warehouse location
+ * @param {string} id
+ */
+export const deleteVendorPickupLocation = (id) =>
+    api.delete(`/vendor/pickup-locations/${id}`);
+
+/**
+ * Set a pickup location as default
+ * @param {string} id
+ */
+export const setDefaultVendorPickupLocation = (id) =>
+    api.patch(`/vendor/pickup-locations/${id}/default`);
 
 
 // ─── EARNINGS ──────────────────────────────────────────────────────────────────

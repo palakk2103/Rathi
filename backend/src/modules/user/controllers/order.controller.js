@@ -16,6 +16,8 @@ import { calculateOrderGst } from '../../../services/gst.service.js';
 import { updateStatsForUser } from '../../../services/codStats.service.js';
 import CodStats from '../../../models/CodStats.model.js';
 import { createRazorpayOrder } from '../../../services/razorpay.service.js';
+import { sendOrderStatusEmail } from '../../../services/orderEmailNotification.service.js';
+import { notifyVendorsOfNewOrder } from '../../../services/socket.service.js';
 
 const normalizeVariantPart = (value) => String(value || '').trim().toLowerCase();
 const normalizeAxisName = (value) =>
@@ -559,6 +561,14 @@ export const placeOrder = asyncHandler(async (req, res) => {
     const responseMessage = idempotentReplay
         ? 'Duplicate order request ignored. Returning existing order.'
         : 'Order placed successfully.';
+
+    // Send order received email for new orders (not idempotent replays)
+    if (order && !idempotentReplay) {
+        sendOrderStatusEmail(order, '', 'pending').catch(() => {});
+        // Emit real-time new-order event to relevant vendors
+        notifyVendorsOfNewOrder(order);
+    }
+
     res.status(responseStatus).json(
         new ApiResponse(
             responseStatus,
@@ -672,6 +682,11 @@ export const cancelOrder = asyncHandler(async (req, res) => {
     }
 
     res.status(200).json(new ApiResponse(200, null, 'Order cancelled successfully.'));
+
+    // Send cancellation email after responding to the user (fetch order post-transaction)
+    Order.findOne({ orderId: req.params.id }).lean().then((cancelledOrder) => {
+        if (cancelledOrder) sendOrderStatusEmail(cancelledOrder, 'pending', 'cancelled').catch(() => {});
+    }).catch(() => {});
 });
 
 const normalizeReturnRequest = (requestDoc) => {
