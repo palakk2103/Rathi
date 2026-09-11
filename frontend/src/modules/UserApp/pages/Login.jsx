@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { FiPhone, FiLock, FiEye, FiEyeOff, FiArrowRight, FiShield } from 'react-icons/fi';
+import { FiPhone, FiLock, FiEye, FiEyeOff, FiArrowRight, FiShield, FiArrowLeft } from 'react-icons/fi';
 import { motion } from 'framer-motion';
 import { useAuthStore } from '../../../shared/store/authStore';
 import { useCartStore } from '../../../shared/store/useStore';
@@ -81,6 +81,15 @@ const MobileLogin = () => {
             className="w-full max-w-md"
           >
             <div className="bg-white rounded-2xl p-6 shadow-sm">
+              {/* Back Button */}
+              <button
+                type="button"
+                onClick={() => navigate(-1)}
+                className="mb-6 flex items-center text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <FiArrowLeft className="mr-2" size={20} />
+                <span className="text-sm font-medium">Back</span>
+              </button>
               
               {/* Header */}
               <div className="text-center mb-8">
